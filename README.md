@@ -133,7 +133,7 @@ npx wrangler deploy
 ```
 
 > 端到端联调（无需手机，合成音验证链路）：`cd relay && npm run e2e:cf`。
-> Mac 端要把中继地址改成 `wss://remotevoice-pwa.sunlinhua.workers.dev/ws`（状态栏菜单可改）。
+> Mac 端**默认就连这个云端地址**（写死在 `RelayClient.defaultRelayURL`），开 App 即自动连、出配对码，无需手输；状态栏菜单仍可改成别的中继。
 
 ### 方案 B：自有服务器（Node 常驻）
 
