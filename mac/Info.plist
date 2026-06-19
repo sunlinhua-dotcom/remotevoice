@@ -11,8 +11,7 @@
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
-  <!-- 状态栏 accessory App：不在 Dock 显示 -->
-  <key>LSUIElement</key><true/>
+  <!-- 在 Dock 显示（用户要能找到）。同时保留状态栏图标。 -->
   <key>NSHumanReadableCopyright</key><string>Private / 个人使用</string>
 </dict>
 </plist>

@@ -52,10 +52,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         client.connect(to: relayUrl)
+
+        // 启动即弹出「配对 / 设备」窗口，用户一眼能看到二维码/数字码（也便于在 Dock 找到本 App）。
+        openPairing()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         DictationHUD.shared.teardown()
+    }
+
+    /// 点 Dock 图标（无可见窗口时）→ 重新打开配对窗口。
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { openPairing() }
+        return true
     }
 
     private func buildMenu() {

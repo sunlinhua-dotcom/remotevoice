@@ -1,6 +1,6 @@
 // Service Worker：离线壳 + 可安装 PWA。仅缓存 App Shell（静态资源）。
 // 版本号每次发布需变更（sw.js 字节变化才会触发浏览器更新 SW）。
-const CACHE = "remotevoice-v2";
+const CACHE = "remotevoice-v3";
 const ASSETS = [
   "/", "/index.html", "/style.css", "/app.js", "/pcm-worker.js",
   "/manifest.json", "/icon.svg",

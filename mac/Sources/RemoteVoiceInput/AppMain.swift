@@ -15,7 +15,8 @@ struct RemoteVoiceInputApp {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.setActivationPolicy(.accessory) // 不在 Dock 显示
+        // 显示在 Dock（用户要能找到这个 App）。同时保留状态栏图标。
+        app.setActivationPolicy(.regular)
         app.run()
     }
 }
