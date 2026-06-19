@@ -28,6 +28,8 @@ interface ClientState {
   code?: string;
   roomCode?: string;
   failedPairs: number;
+  macId?: string;        // 设备信任模型：房间 = 这台 Mac
+  deviceToken?: string;  // 手机的长期凭证（首次配对后下发，可单独吊销）
 }
 
 interface Room {
@@ -49,10 +51,23 @@ export class RelayHub {
   private pendingByCode = new Map<string, { macWs: WebSocket; expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
   private rooms = new Map<string, Room>();
   private pairFailsByIp = new Map<string, number[]>();
+  // 设备信任模型用：一次性扫码令牌（token → macId+过期），手机离线等待队列（macId → 手机连接）。
+  private pairTokens = new Map<string, { macId: string; expiresAt: number }>();
+  private waitingPhones = new Map<string, Set<WebSocket>>();
   private llm: DoubaoLlm;
 
   constructor(private state: DurableObjectState, private env: Env) {
     this.llm = new DoubaoLlm(this.arkConfig());
+    // 已配对设备持久化在 DO 的 SQLite（重启/驱逐都不丢）。一台 Mac(mac_id) 下多台手机(token)。
+    try {
+      this.sql.exec(
+        "CREATE TABLE IF NOT EXISTS devices (mac_id TEXT NOT NULL, token TEXT NOT NULL, name TEXT, created_at INTEGER, last_seen INTEGER, PRIMARY KEY (mac_id, token))",
+      );
+    } catch { /* sql 理论上必有；缺失则设备信任降级，不影响旧随机码流程 */ }
+  }
+
+  private get sql(): SqlStorage {
+    return this.state.storage.sql;
   }
 
   private asrConfig(): AsrConfig {
@@ -139,6 +154,15 @@ export class RelayHub {
       case "config":
         if (client.role !== "mac") return;
         return this.handleConfig(client, msg);
+      case "new_pair_code":
+        if (client.role !== "mac" || !client.macId) return;
+        return this.handleNewPairCode(client);
+      case "list_devices":
+        if (client.role !== "mac" || !client.macId) return;
+        return this.send(ws, { type: "devices", list: this.listDevices(client.macId) });
+      case "revoke_device":
+        if (client.role !== "mac" || !client.macId) return;
+        return this.handleRevokeDevice(client, msg);
       default:
         return this.send(ws, { type: "error", code: "bad_type", message: `未知 type: ${msg.type}` });
     }
@@ -147,6 +171,8 @@ export class RelayHub {
   private handleHello(client: ClientState, msg: any): void {
     const role = msg.role;
     if (role === "mac") {
+      // 新模型：Mac 自带稳定 macId（房间），走设备信任流程。
+      if (typeof msg.macId === "string" && msg.macId) return this.handleMacHelloV2(client, String(msg.macId));
       this.detach(client);
       const code = this.generateCode();
       client.role = "mac";
@@ -169,6 +195,8 @@ export class RelayHub {
         try { client.ws.close(1008, "rate limited"); } catch { /* ignore */ }
         return;
       }
+      // 新模型：手机带 macId + (pairToken 首次 / deviceToken 复用)。
+      if (typeof msg.macId === "string" && msg.macId) return this.handlePhoneHelloV2(client, msg);
       const code = String(msg.code ?? "");
       const room = this.pairPhone(client, code);
       if (!room) {
@@ -294,6 +322,7 @@ export class RelayHub {
   private onClose(ws: WebSocket): void {
     const client = this.clients.get(ws);
     if (!client) return;
+    this.removeWaitingPhone(ws);
     this.detach(client);
     this.clients.delete(ws);
   }
@@ -393,6 +422,168 @@ export class RelayHub {
       peer,
       asr_ok: room ? !!room.asr : false,
     });
+  }
+
+  // ========== 设备信任模型（macId 房间 + 持久化已配对设备） ==========
+
+  private handleMacHelloV2(client: ClientState, macId: string): void {
+    this.detach(client);
+    client.role = "mac";
+    client.macId = macId;
+    client.roomCode = macId;
+    let room = this.rooms.get(macId);
+    if (!room) { room = { code: macId, llmPostprocess: true }; this.rooms.set(macId, room); }
+    room.macWs = client.ws;
+    console.log("[relay] mac online", client.id, "devices=", this.listDevices(macId).length);
+    this.send(client.ws, { type: "mac_ready", mac_id: macId });
+    this.send(client.ws, { type: "devices", list: this.listDevices(macId) });
+    // mac 离线期间先连上的可信手机，在 mac 上线时补配对
+    this.pairWaitingPhones(macId, room);
+    // 若房间里已有手机（mac 重连场景），双方重新确认
+    if (room.phoneWs) {
+      this.send(client.ws, { type: "paired", peer: "phone" });
+      this.send(room.phoneWs, { type: "paired", peer: "mac", mac_id: macId });
+    }
+    this.pushStatus(client);
+  }
+
+  private handlePhoneHelloV2(client: ClientState, msg: any): void {
+    client.role = "phone";
+    const macId = String(msg.macId);
+    const pairToken = msg.pairToken ? String(msg.pairToken) : "";
+    const deviceToken = msg.deviceToken ? String(msg.deviceToken) : "";
+    const name = (typeof msg.name === "string" && msg.name.trim()) ? msg.name.trim().slice(0, 40) : "手机";
+
+    let token = "";
+    let issued = false;
+    if (pairToken) {
+      // 首次配对：校验一次性扫码令牌
+      const pt = this.pairTokens.get(pairToken);
+      if (!pt || pt.macId !== macId || pt.expiresAt < Date.now()) {
+        if (pt) this.pairTokens.delete(pairToken);
+        return this.phonePairFail(client, "bad_pair", "二维码无效或已过期，请在 Mac 上重新生成");
+      }
+      this.pairTokens.delete(pairToken);
+      token = crypto.randomUUID().replace(/-/g, "");
+      this.trustDevice(macId, token, name);
+      issued = true;
+    } else if (deviceToken) {
+      // 复用：核对长期设备凭证
+      if (!this.isTrusted(macId, deviceToken)) {
+        return this.phonePairFail(client, "untrusted", "此设备未授权，请重新扫码配对");
+      }
+      token = deviceToken;
+      this.touchDevice(macId, token);
+    } else {
+      return this.phonePairFail(client, "bad_args", "缺少配对令牌");
+    }
+
+    client.macId = macId;
+    client.deviceToken = token;
+    client.roomCode = macId;
+    client.failedPairs = 0;
+
+    let room = this.rooms.get(macId);
+    if (!room) { room = { code: macId, llmPostprocess: true }; this.rooms.set(macId, room); }
+    room.phoneWs = client.ws;
+
+    const reply: Record<string, unknown> = { type: "paired", peer: "mac", mac_id: macId };
+    if (issued) reply.device_token = token; // 仅首次下发，手机存本地，以后免扫码
+    this.send(client.ws, reply);
+    this.send(client.ws, { type: "config", llm_postprocess: room.llmPostprocess });
+
+    if (room.macWs) {
+      console.log("[relay] paired", macId, issued ? "(new)" : "(known)");
+      this.send(room.macWs, { type: "paired", peer: "phone" });
+      this.send(room.macWs, { type: "devices", list: this.listDevices(macId) });
+      this.pushStatusFor(room.macWs);
+    } else {
+      // Mac 暂时离线：手机进等待队列，mac 上线即自动配上
+      this.addWaitingPhone(macId, client.ws);
+      this.send(client.ws, { type: "status", relay_connected: true, peer: "", asr_ok: false });
+    }
+    this.pushStatus(client);
+  }
+
+  private phonePairFail(client: ClientState, code: string, message: string): void {
+    client.failedPairs += 1;
+    const ipFails = this.recordPairFail(client.ip);
+    this.send(client.ws, { type: "error", code, message });
+    if (client.failedPairs >= PAIR_FAIL_MAX_PER_CONN || ipFails >= PAIR_FAIL_MAX_PER_IP) {
+      try { client.ws.close(1008, "too many attempts"); } catch { /* ignore */ }
+    }
+  }
+
+  private handleNewPairCode(client: ClientState): void {
+    const macId = client.macId!;
+    const now = Date.now();
+    for (const [t, v] of this.pairTokens) if (v.expiresAt < now) this.pairTokens.delete(t);
+    const token = crypto.randomUUID().replace(/-/g, "");
+    this.pairTokens.set(token, { macId, expiresAt: now + this.pairCodeTtlMs });
+    this.send(client.ws, { type: "pair_code", token, ttl_ms: this.pairCodeTtlMs });
+  }
+
+  private handleRevokeDevice(client: ClientState, msg: any): void {
+    const macId = client.macId!;
+    const token = String(msg.token ?? msg.id ?? "");
+    if (!token) return;
+    this.untrustDevice(macId, token);
+    // 踢掉当前在线的该设备
+    for (const [ws, st] of this.clients) {
+      if (st.role === "phone" && st.macId === macId && st.deviceToken === token) {
+        this.send(ws, { type: "unpaired", reason: "revoked", message: "已被移除授权" });
+        try { ws.close(1008, "revoked"); } catch { /* ignore */ }
+      }
+    }
+    this.send(client.ws, { type: "devices", list: this.listDevices(macId) });
+  }
+
+  private addWaitingPhone(macId: string, ws: WebSocket): void {
+    let s = this.waitingPhones.get(macId);
+    if (!s) { s = new Set(); this.waitingPhones.set(macId, s); }
+    s.add(ws);
+  }
+  private pairWaitingPhones(macId: string, room: Room): void {
+    const s = this.waitingPhones.get(macId);
+    if (!s) return;
+    for (const ws of s) {
+      const st = this.clients.get(ws);
+      if (st && st.role === "phone" && ws.readyState === 1) {
+        room.phoneWs = ws;
+        this.send(ws, { type: "paired", peer: "mac", mac_id: macId });
+        this.send(ws, { type: "config", llm_postprocess: room.llmPostprocess });
+        if (room.macWs) this.send(room.macWs, { type: "paired", peer: "phone" });
+      }
+    }
+    this.waitingPhones.delete(macId);
+  }
+  private removeWaitingPhone(ws: WebSocket): void {
+    for (const [k, s] of this.waitingPhones) {
+      if (s.delete(ws) && s.size === 0) this.waitingPhones.delete(k);
+    }
+  }
+
+  // ---- SQLite 设备存储 ----
+  private trustDevice(macId: string, token: string, name: string): void {
+    const now = Date.now();
+    this.sql.exec(
+      "INSERT OR REPLACE INTO devices (mac_id, token, name, created_at, last_seen) VALUES (?, ?, ?, ?, ?)",
+      macId, token, name, now, now,
+    );
+  }
+  private isTrusted(macId: string, token: string): boolean {
+    return this.sql.exec("SELECT 1 FROM devices WHERE mac_id = ? AND token = ? LIMIT 1", macId, token).toArray().length > 0;
+  }
+  private touchDevice(macId: string, token: string): void {
+    this.sql.exec("UPDATE devices SET last_seen = ? WHERE mac_id = ? AND token = ?", Date.now(), macId, token);
+  }
+  private untrustDevice(macId: string, token: string): void {
+    this.sql.exec("DELETE FROM devices WHERE mac_id = ? AND token = ?", macId, token);
+  }
+  private listDevices(macId: string): Array<{ id: string; name: string; createdAt: number; lastSeen: number }> {
+    return this.sql.exec("SELECT token, name, created_at, last_seen FROM devices WHERE mac_id = ? ORDER BY created_at", macId)
+      .toArray()
+      .map((r: any) => ({ id: String(r.token), name: String(r.name ?? "手机"), createdAt: Number(r.created_at), lastSeen: Number(r.last_seen) }));
   }
 
   private generateCode(): string {
