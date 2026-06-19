@@ -1,0 +1,29 @@
+# 依赖
+node_modules/
+relay/node_modules/
+
+# 构建产物
+relay/dist/
+mac/.build/
+mac/build/
+mac/ime/build/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# 本地配置 / 密钥（绝不入库）
+.env
+relay/.env
+*.local
+
+# 日志
+*.log
+npm-debug.log*
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

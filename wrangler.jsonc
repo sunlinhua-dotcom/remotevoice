@@ -1,0 +1,13 @@
+{
+  // Cloudflare 部署：把 web/ 这个 PWA 作为 Worker 静态资产托管。
+  // 部署：npx wrangler deploy   →  https://remotevoice-pwa.<你的子域>.workers.dev
+  //
+  // 注意：这里只托管前端 PWA（静态）。WebSocket 中继（relay/，含 ASR+LLM+密钥）
+  // 是常驻 Node 服务，无法跑在静态托管上，需单独部署（见 deploy/）。
+  // 部署后在 PWA 设置里把中继地址填成中继的 wss:// 公网地址。
+  "name": "remotevoice-pwa",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./web"
+  }
+}

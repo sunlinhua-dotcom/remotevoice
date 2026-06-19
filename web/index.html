@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>RemoteVoice 语音输入</title>
+  <link rel="manifest" href="/manifest.json" />
+  <!-- iOS 不读 manifest 图标、也不支持 SVG 主屏图标，必须用不透明的 apple-touch-icon PNG -->
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="app">
+    <!-- 连接态 -->
+    <header class="topbar">
+      <span id="connState" class="badge badge-off">未连接</span>
+      <span id="peerState" class="badge badge-muted">等待 Mac</span>
+      <button id="settingsBtn" class="icon-btn" aria-label="设置">⚙</button>
+    </header>
+
+    <!-- 配对面板 -->
+    <section id="pairPanel" class="panel">
+      <h1>RemoteVoice</h1>
+      <p class="hint">在 Mac 状态栏查看 6 位配对码，输入并配对</p>
+      <input id="codeInput" class="code-input" inputmode="numeric" maxlength="6"
+             placeholder="配对码" autocomplete="off" />
+      <button id="pairBtn" class="btn btn-primary">配对</button>
+      <p id="pairMsg" class="msg"></p>
+    </section>
+
+    <!-- 主面板（配对成功后） -->
+    <section id="talkPanel" class="panel hidden">
+      <div class="live">
+        <p id="partial" class="partial">按住下方按钮说话</p>
+        <p id="final" class="final"></p>
+      </div>
+      <button id="talkBtn" class="talk-btn" aria-label="按住说话">
+        <span class="talk-label">按住说话</span>
+        <span class="talk-sub">松开发送</span>
+      </button>
+      <div class="status-line">
+        <span id="llmFlag" class="badge badge-muted">标点纠错：开</span>
+        <span id="levelMeter" class="meter"><i></i></span>
+      </div>
+    </section>
+
+    <!-- 设置面板 -->
+    <section id="settingsPanel" class="panel hidden">
+      <h2>设置</h2>
+      <label class="row">
+        <span>服务器地址</span>
+        <input id="relayInput" placeholder="wss://host/ws" />
+      </label>
+      <label class="row switch">
+        <span>LLM 标点纠错</span>
+        <input id="llmSwitch" type="checkbox" checked />
+      </label>
+      <button id="settingsClose" class="btn">完成</button>
+    </section>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+  <script src="/sw-register.js" defer></script>
+</body>
+</html>
