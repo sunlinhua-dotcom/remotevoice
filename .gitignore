@@ -10,6 +10,10 @@ mac/ime/build/
 *.xcodeproj/xcuserdata/
 DerivedData/
 
+# Cloudflare / wrangler 本地缓存
+.wrangler/
+cf/.wrangler/
+
 # 本地配置 / 密钥（绝不入库）
 .env
 relay/.env

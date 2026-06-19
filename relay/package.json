@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "e2e:pair": "node scripts/e2e-pair.mjs",
     "e2e:asr": "node --import tsx scripts/e2e-asr.mjs",
-    "e2e:llm": "node --import tsx scripts/e2e-llm.mjs"
+    "e2e:llm": "node --import tsx scripts/e2e-llm.mjs",
+    "e2e:cf": "node scripts/e2e-cf.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

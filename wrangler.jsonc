@@ -1,13 +1,19 @@
 {
-  // Cloudflare 部署：把 web/ 这个 PWA 作为 Worker 静态资产托管。
+  // RemoteVoice 统一部署：一个 Worker 同时托管手机 PWA（静态资产）和 WebSocket 中继（Durable Object）。
+  // 同源，所以 PWA 默认的 wss://host/ws 直接连到中继，无需手填地址。
   // 部署：npx wrangler deploy   →  https://remotevoice-pwa.<你的子域>.workers.dev
   //
-  // 注意：这里只托管前端 PWA（静态）。WebSocket 中继（relay/，含 ASR+LLM+密钥）
-  // 是常驻 Node 服务，无法跑在静态托管上，需单独部署（见 deploy/）。
-  // 部署后在 PWA 设置里把中继地址填成中继的 wss:// 公网地址。
+  // 密钥不写这里：用 `npx wrangler secret put DOUBAO_ASR_APP_ID` 等设置（见 cf/README 注释）。
+  // 静态资产命中即返回；/ws 与 /healthz 落到 Worker → 单例 DurableObject RelayHub。
   "name": "remotevoice-pwa",
+  "main": "cf/src/index.ts",
   "compatibility_date": "2025-09-01",
   "assets": {
     "directory": "./web"
-  }
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "RELAY_HUB", "class_name": "RelayHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RelayHub"] }],
+  "observability": { "enabled": true }
 }
