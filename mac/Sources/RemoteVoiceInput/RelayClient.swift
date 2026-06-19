@@ -15,6 +15,14 @@ enum MacIdentity {
         d.set(fresh, forKey: defaultsKey)
         return fresh
     }
+    /// 重置：换一个新的 macId（旧二维码/数字码作废，所有已配对设备失效）。
+    @discardableResult
+    static func rotate() -> String {
+        lock.lock(); defer { lock.unlock() }
+        let fresh = UUID().uuidString
+        UserDefaults.standard.set(fresh, forKey: defaultsKey)
+        return fresh
+    }
 }
 
 /// 已配对的手机设备（来自中继 devices 列表）。
@@ -64,7 +72,7 @@ final class RelayClient: NSObject {
         case error(String)
         // --- 设备信任 / 扫码配对 ---
         case macReady(String)       // mac_id，房间就绪
-        case pairCode(token: String, ttlMs: Int)
+        case shortCode(String)      // 4 位数字短码（扫码兜底）
         case devices([Device])
         case unpaired
     }
@@ -178,10 +186,8 @@ final class RelayClient: NSObject {
             case "mac_ready":
                 let id = (obj["mac_id"] as? String) ?? (obj["macId"] as? String) ?? ""
                 self.onEvent?(.macReady(id))
-            case "pair_code":
-                let token = (obj["token"] as? String) ?? ""
-                let ttl = (obj["ttl_ms"] as? NSNumber)?.intValue ?? 300_000
-                self.onEvent?(.pairCode(token: token, ttlMs: ttl))
+            case "short_code":
+                if let code = obj["code"] as? String { self.onEvent?(.shortCode(code)) }
             case "devices":
                 let list = (obj["list"] as? [[String: Any]]) ?? []
                 self.onEvent?(.devices(list.compactMap(Device.init(json:))))
@@ -203,7 +209,7 @@ final class RelayClient: NSObject {
     }
 
     // ---------- 设备信任 / 扫码配对 便捷发送 ----------
-    func requestNewPairCode() { send(["type": "new_pair_code"]) }
+    func requestShortCode() { send(["type": "new_short_code"]) }
     func requestDeviceList() { send(["type": "list_devices"]) }
     func revokeDevice(token: String) { send(["type": "revoke_device", "token": token]) }
 

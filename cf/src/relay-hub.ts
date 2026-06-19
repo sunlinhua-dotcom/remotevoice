@@ -66,6 +66,10 @@ export class RelayHub {
       this.sql.exec(
         "CREATE TABLE IF NOT EXISTS pair_tokens (token TEXT PRIMARY KEY, mac_id TEXT NOT NULL, expires_at INTEGER NOT NULL)",
       );
+      // 4 位数字短码（扫不了码时手输的兜底），短码 → macId，带 TTL。
+      this.sql.exec(
+        "CREATE TABLE IF NOT EXISTS short_codes (code TEXT PRIMARY KEY, mac_id TEXT NOT NULL, expires_at INTEGER NOT NULL)",
+      );
     } catch { /* sql 理论上必有；缺失则设备信任降级，不影响旧随机码流程 */ }
   }
 
@@ -160,6 +164,9 @@ export class RelayHub {
       case "new_pair_code":
         if (client.role !== "mac" || !client.macId) return;
         return this.handleNewPairCode(client);
+      case "new_short_code":
+        if (client.role !== "mac" || !client.macId) return;
+        return this.handleNewShortCode(client);
       case "list_devices":
         if (client.role !== "mac" || !client.macId) return;
         return this.send(ws, { type: "devices", list: this.listDevices(client.macId) });
@@ -198,8 +205,10 @@ export class RelayHub {
         try { client.ws.close(1008, "rate limited"); } catch { /* ignore */ }
         return;
       }
-      // 新模型：手机带 macId + (pairToken 首次 / deviceToken 复用)。
-      if (typeof msg.macId === "string" && msg.macId) return this.handlePhoneHelloV2(client, msg);
+      // 新模型：永久二维码(macId) / 4位数字短码(code) / 已知设备复用(deviceToken)。
+      if ((typeof msg.macId === "string" && msg.macId) || (typeof msg.code === "string" && msg.code)) {
+        return this.handlePhoneHelloV2(client, msg);
+      }
       const code = String(msg.code ?? "");
       const room = this.pairPhone(client, code);
       if (!room) {
@@ -452,15 +461,31 @@ export class RelayHub {
 
   private handlePhoneHelloV2(client: ClientState, msg: any): void {
     client.role = "phone";
-    const macId = String(msg.macId);
+    let macId = (typeof msg.macId === "string") ? msg.macId : "";
+    const code = (typeof msg.code === "string") ? msg.code.trim() : "";
     const pairToken = msg.pairToken ? String(msg.pairToken) : "";
     const deviceToken = msg.deviceToken ? String(msg.deviceToken) : "";
     const name = (typeof msg.name === "string" && msg.name.trim()) ? msg.name.trim().slice(0, 40) : "手机";
 
+    // 4 位数字短码（手机不知道 macId、扫不了码时手输）→ 解析出 macId。
+    if (!macId && code) {
+      const resolved = this.resolveShortCode(code);
+      if (!resolved) return this.phonePairFail(client, "bad_code", "数字配对码无效或已过期");
+      macId = resolved;
+    }
+    if (!macId) return this.phonePairFail(client, "bad_args", "缺少配对信息");
+
     let token = "";
     let issued = false;
-    if (pairToken) {
-      // 首次配对：校验一次性扫码令牌（持久化在 SQLite，部署/驱逐都不丢）
+    if (deviceToken) {
+      // 复用：核对长期设备凭证
+      if (!this.isTrusted(macId, deviceToken)) {
+        return this.phonePairFail(client, "untrusted", "此设备未授权，请重新扫码配对");
+      }
+      token = deviceToken;
+      this.touchDevice(macId, token);
+    } else if (pairToken) {
+      // 兼容旧一次性令牌（e2e / 旧客户端）
       const tokenMacId = this.takePairToken(pairToken);
       if (!tokenMacId || tokenMacId !== macId) {
         return this.phonePairFail(client, "bad_pair", "二维码无效或已过期，请在 Mac 上重新生成");
@@ -468,15 +493,11 @@ export class RelayHub {
       token = crypto.randomUUID().replace(/-/g, "");
       this.trustDevice(macId, token, name);
       issued = true;
-    } else if (deviceToken) {
-      // 复用：核对长期设备凭证
-      if (!this.isTrusted(macId, deviceToken)) {
-        return this.phonePairFail(client, "untrusted", "此设备未授权，请重新扫码配对");
-      }
-      token = deviceToken;
-      this.touchDevice(macId, token);
     } else {
-      return this.phonePairFail(client, "bad_args", "缺少配对令牌");
+      // 永久二维码（macId 即长期密钥）或 4 位短码 → 首次配对，签发长期 device token。
+      token = crypto.randomUUID().replace(/-/g, "");
+      this.trustDevice(macId, token, name);
+      issued = true;
     }
 
     client.macId = macId;
@@ -531,6 +552,43 @@ export class RelayHub {
     if (!rows.length) return null;
     const r: any = rows[0];
     if (Number(r.expires_at) < Date.now()) return null;
+    return String(r.mac_id);
+  }
+
+  // ---- 4 位数字短码（扫码兜底）----
+  private generateShortCode(): string {
+    const now = Date.now();
+    for (let i = 0; i < 50; i++) {
+      const a = new Uint32Array(1);
+      crypto.getRandomValues(a);
+      const code = String(a[0] % 10000).padStart(4, "0");
+      const taken = this.sql.exec("SELECT 1 FROM short_codes WHERE code = ? AND expires_at > ? LIMIT 1", code, now).toArray().length > 0;
+      if (!taken) return code;
+    }
+    const a = new Uint32Array(1);
+    crypto.getRandomValues(a);
+    return String(a[0] % 10000).padStart(4, "0");
+  }
+
+  private handleNewShortCode(client: ClientState): void {
+    const macId = client.macId!;
+    const now = Date.now();
+    this.sql.exec("DELETE FROM short_codes WHERE expires_at < ?", now);
+    const ttl = 10 * 60_000; // 10 分钟
+    const code = this.generateShortCode();
+    this.sql.exec("INSERT OR REPLACE INTO short_codes (code, mac_id, expires_at) VALUES (?, ?, ?)", code, macId, now + ttl);
+    this.send(client.ws, { type: "short_code", code, ttl_ms: ttl });
+  }
+
+  /** 解析 4 位短码 → macId（TTL 内可复用，过期清除）。 */
+  private resolveShortCode(code: string): string | null {
+    const rows = this.sql.exec("SELECT mac_id, expires_at FROM short_codes WHERE code = ?", code).toArray();
+    if (!rows.length) return null;
+    const r: any = rows[0];
+    if (Number(r.expires_at) < Date.now()) {
+      this.sql.exec("DELETE FROM short_codes WHERE code = ?", code);
+      return null;
+    }
     return String(r.mac_id);
   }
 

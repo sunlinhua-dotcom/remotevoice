@@ -28,6 +28,13 @@
       <h1>RemoteVoice</h1>
       <p class="hint">在 Mac 菜单栏点「配对 / 设备…」，用手机相机扫一扫即可配对。配过一次后，以后自动连接，无需再扫。</p>
       <button id="scanBtn" class="btn btn-primary">扫一扫</button>
+      <div class="code-fallback">
+        <span class="code-fallback-hint">扫不了？输入 Mac 上的 4 位数字码</span>
+        <div class="code-row">
+          <input id="codeInput" class="code-input4" inputmode="numeric" maxlength="4" placeholder="0000" autocomplete="off" />
+          <button id="codePairBtn" class="btn">配对</button>
+        </div>
+      </div>
       <p id="pairMsg" class="msg"></p>
       <div id="scanBox" class="scan-box hidden">
         <video id="scanVideo" playsinline muted></video>

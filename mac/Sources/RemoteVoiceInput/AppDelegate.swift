@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let peerItem = NSMenuItem(title: "对端：等待手机", action: nil, keyEquivalent: "")
     private let pairingItem = NSMenuItem(title: "配对 / 设备…", action: #selector(openPairing), keyEquivalent: "")
     private let devicesItem = NSMenuItem(title: "已配对设备：0", action: nil, keyEquivalent: "")
+    private let resetItem = NSMenuItem(title: "重置配对（换新二维码）…", action: #selector(resetPairing), keyEquivalent: "")
     private let lastTextItem = NSMenuItem(title: "最近：——", action: nil, keyEquivalent: "")
     private let llmItem = NSMenuItem(title: "标点纠错：开", action: #selector(toggleLlm), keyEquivalent: "")
     private let relayItem = NSMenuItem(title: "服务器：——", action: #selector(editRelay), keyEquivalent: "")
@@ -60,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildMenu() {
         let sep = { NSMenuItem.separator() }
         for item in [connItem, peerItem, sep(),
-                     pairingItem, devicesItem, sep(),
+                     pairingItem, devicesItem, resetItem, sep(),
                      lastTextItem, sep(),
                      llmItem, relayItem, rescanItem, sep(),
                      quitItem] {
@@ -138,8 +139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .macReady:
             peerItem.title = "对端：等待手机"
             updateIcon(.standby)
-        case .pairCode(let token, _):
-            pairingWC?.applyPairCode(token)
+            pairingWC?.refreshIfOpen()      // 重连/重置后刷新二维码与数字码
+        case .shortCode(let code):
+            pairingWC?.applyShortCode(code)
         case .devices(let list):
             devicesItem.title = "已配对设备：\(list.count)"
             pairingWC?.applyDevices(list)
@@ -183,6 +185,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pairingWC = PairingWindowController(relay: client, relayUrl: relayUrl)
         }
         pairingWC?.showAndRequest()
+    }
+
+    @objc func resetPairing() {
+        let alert = NSAlert()
+        alert.messageText = "重置配对？"
+        alert.informativeText = "将生成全新的二维码与数字码。已配对的所有手机都会失效，需要重新扫码。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "重置")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        client.macId = MacIdentity.rotate()   // 换新 macId
+        client.connect(to: relayUrl)            // 用新身份重连注册房间 → 触发 .macReady 刷新窗口
+        devicesItem.title = "已配对设备：0"
+        pairingWC?.applyDevices([])
     }
 
     @objc func toggleLlm() {

@@ -45,6 +45,18 @@ h2 { font-size: 20px; margin: 0; align-self: flex-start; }
 }
 .code-input:focus { border-color: var(--primary); }
 
+/* 4 位数字码兜底 */
+.code-fallback { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 4px; }
+.code-fallback-hint { font-size: 13px; color: var(--muted); }
+.code-row { display: flex; gap: 8px; align-items: center; }
+.code-input4 {
+  font-size: 26px; letter-spacing: 10px; text-align: center;
+  width: 150px; padding: 8px 6px 8px 12px;
+  background: var(--bg-2); color: var(--fg); border: 2px solid #334155;
+  border-radius: 12px; outline: none;
+}
+.code-input4:focus { border-color: var(--primary); }
+
 /* 内置扫一扫取景框 */
 .scan-box { display: flex; flex-direction: column; align-items: center; gap: 12px; width: min(320px, 82vw); }
 .scan-box video {

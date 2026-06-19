@@ -27,6 +27,7 @@ const elConn = $("connState"), elPeer = $("peerState");
 const elPairPanel = $("pairPanel"), elTalkPanel = $("talkPanel");
 const elScanBtn = $("scanBtn"), elPairMsg = $("pairMsg");
 const elScanBox = $("scanBox"), elScanVideo = $("scanVideo"), elScanCancel = $("scanCancel");
+const elCodeInput = $("codeInput"), elCodePairBtn = $("codePairBtn");
 
 // ---------- 配对凭证（设备信任）----------
 // 扫码得到的一次性令牌(URL ?m=&p=)，或本地记住的长期 device_token。
@@ -61,10 +62,14 @@ function init() {
   elRelayInput.value = relayUrl;
   elScanBtn.onclick = startScan;
   elScanCancel.onclick = stopScan;
-  // iOS Safari 没有 BarcodeDetector，内置扫码用不了：藏掉按钮，改成引导用系统相机。
+  // 4 位数字码兜底
+  elCodePairBtn.onclick = pairWithCode;
+  elCodeInput.addEventListener("input", () => { elCodeInput.value = elCodeInput.value.replace(/\D/g, "").slice(0, 4); });
+  elCodeInput.addEventListener("keydown", (e) => { if (e.key === "Enter") pairWithCode(); });
+  // iOS Safari 没有 BarcodeDetector，内置扫码用不了：藏掉按钮，引导用系统相机（数字码仍可用）。
   if (!("BarcodeDetector" in window)) {
     elScanBtn.classList.add("hidden");
-    elPairMsg.textContent = "用 iPhone 自带「相机」App 对准 Mac 上的二维码即可配对（本页无需操作）。";
+    elPairMsg.textContent = "用 iPhone 自带「相机」对准 Mac 二维码即可；或在下方输入 4 位数字码。";
   }
 
   // PTT：pointerdown/up（兼容鼠标+触摸）。
@@ -182,6 +187,8 @@ function onMessage(ev) {
       } else if (msg.code === "bad_pair") {
         showPair();
         elPairMsg.textContent = "二维码已过期，请在 Mac 上重新生成";
+      } else if (msg.code === "bad_code") {
+        elPairMsg.textContent = "数字码无效或已过期，请看 Mac 上最新的 4 位码";
       } else if (!paired) {
         elPairMsg.textContent = msg.message || "出错了";
       }
@@ -201,9 +208,12 @@ function updateLlmFlag() {
 // ---------- 配对（设备信任）----------
 // 连接打开后自动调用：优先用刚扫到的一次性令牌；否则用本地记住的设备凭证；都没有就显示扫码界面。
 function tryAutoPair() {
-  if (pairMacId && pairToken) {
+  if (pairMacId) {
+    // 永久二维码：只带 macId（macId 即长期密钥）；兼容旧版若带了 pairToken 也一并发。
     elPairMsg.textContent = "正在配对…";
-    send({ type: "hello", role: "phone", macId: pairMacId, pairToken, name: deviceName() });
+    const m = { type: "hello", role: "phone", macId: pairMacId, name: deviceName() };
+    if (pairToken) m.pairToken = pairToken;
+    send(m);
   } else if (savedMacId && savedDeviceToken) {
     send({ type: "hello", role: "phone", macId: savedMacId, deviceToken: savedDeviceToken, name: deviceName() });
   } else if (!paired) {
@@ -214,6 +224,15 @@ function tryAutoPair() {
 async function pairNow() {
   try { if (!ws || ws.readyState !== WebSocket.OPEN) await connect(); } catch { elPairMsg.textContent = "无法连接服务器"; return; }
   tryAutoPair();
+}
+
+// 4 位数字码兜底配对（手机不知道 macId，中继按短码解析）。
+async function pairWithCode() {
+  const code = (elCodeInput.value || "").trim();
+  if (code.length !== 4) { elPairMsg.textContent = "请输入 4 位数字码"; return; }
+  try { if (!ws || ws.readyState !== WebSocket.OPEN) await connect(); } catch { elPairMsg.textContent = "无法连接服务器"; return; }
+  elPairMsg.textContent = "正在配对…";
+  send({ type: "hello", role: "phone", code, name: deviceName() });
 }
 
 // ---------- 内置扫一扫（系统相机扫 URL 是主路径；这是兜底）----------
