@@ -61,6 +61,11 @@ function init() {
   elRelayInput.value = relayUrl;
   elScanBtn.onclick = startScan;
   elScanCancel.onclick = stopScan;
+  // iOS Safari 没有 BarcodeDetector，内置扫码用不了：藏掉按钮，改成引导用系统相机。
+  if (!("BarcodeDetector" in window)) {
+    elScanBtn.classList.add("hidden");
+    elPairMsg.textContent = "用 iPhone 自带「相机」App 对准 Mac 上的二维码即可配对（本页无需操作）。";
+  }
 
   // PTT：pointerdown/up（兼容鼠标+触摸）。
   // 不绑 pointerleave：录音中手指轻微移出按钮不应误判松手；改用 setPointerCapture 锁定指针。
