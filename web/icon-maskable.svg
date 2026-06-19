@@ -18,18 +18,17 @@
     </filter>
   </defs>
 
-  <rect x="16" y="16" width="480" height="480" rx="118" fill="url(#bg)"/>
-  <rect x="16" y="16" width="480" height="480" rx="118" fill="url(#glow)"/>
+  <!-- 满幅背景：maskable 由系统自行裁形，四角不能透明 -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
 
-  <!-- 广播弧线：语音被“远程”传出去 -->
+  <!-- 内容落在中心 80% 安全圈内 -->
   <g fill="none" stroke="#ffffff" stroke-linecap="round">
     <path d="M330 168 Q374 256 330 344" stroke-width="15" stroke-opacity=".92"/>
     <path d="M182 168 Q138 256 182 344" stroke-width="15" stroke-opacity=".92"/>
     <path d="M356 138 Q420 256 356 374" stroke-width="14" stroke-opacity=".5"/>
     <path d="M156 138 Q92 256 156 374" stroke-width="14" stroke-opacity=".5"/>
   </g>
-
-  <!-- 麦克风 -->
   <g filter="url(#sh)">
     <rect x="214" y="116" width="84" height="176" rx="42" fill="url(#mic)"/>
     <path d="M178 250 a78 78 0 0 0 156 0" fill="none" stroke="url(#mic)" stroke-width="18" stroke-linecap="round"/>
