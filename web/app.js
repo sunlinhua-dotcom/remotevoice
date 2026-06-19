@@ -27,6 +27,7 @@ const elConn = $("connState"), elPeer = $("peerState");
 const elPairPanel = $("pairPanel"), elTalkPanel = $("talkPanel");
 const elCode = $("codeInput"), elPairBtn = $("pairBtn"), elPairMsg = $("pairMsg");
 const elTalkBtn = $("talkBtn"), elPartial = $("partial"), elFinal = $("final");
+const elTalkLabel = $("talkLabel"), elTalkStage = document.querySelector(".talk-stage");
 const elLlmFlag = $("llmFlag"), elMeter = $("levelMeter"), elMeterBar = elMeter.querySelector("i");
 const elSettingsBtn = $("settingsBtn"), elSettingsPanel = $("settingsPanel"), elSettingsClose = $("settingsClose");
 const elRelayInput = $("relayInput"), elLlmSwitch = $("llmSwitch");
@@ -180,9 +181,28 @@ function setConn(text, cls) {
 }
 
 // ---------- PTT 录音 ----------
+// 触感：安卓 Chrome 支持 navigator.vibrate；iOS Safari 无网页振动 API（系统限制），只能靠视觉/动效。
+function haptic(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch {} }
+
+// 按住态的视觉切换（声呐脉冲 + 辉光 + 文案），与是否真正录音解耦——
+// 这样"按下去到底按住没有"立刻有反馈，不必等麦克风权限/配对。
+function setHolding(on) {
+  elTalkBtn.classList.toggle("holding", on);
+  elTalkStage && elTalkStage.classList.toggle("holding-stage", on);
+  elTalkLabel.textContent = on ? "松开发送" : "按住说话";
+  if (!on) elTalkBtn.style.setProperty("--level", 0);
+}
+
 async function onTalkDown(e) {
-  if (recording || !paired) return;
+  if (recording) return;
   e.preventDefault();
+  // 1) 立刻给反馈：陷入动效 + 振动（哪怕还没配对/没拿到麦克风）
+  setHolding(true);
+  haptic(18);
+  try { if (e.pointerId != null) elTalkBtn.setPointerCapture(e.pointerId); } catch {}
+  if (!paired) { elPartial.textContent = "请先扫码 / 输码配对"; return; }
+
+  // 2) 真正起录音
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") await audioCtx.resume();
@@ -211,28 +231,30 @@ async function onTalkDown(e) {
     };
 
     recording = true;
-    // 锁定指针：之后该指针的所有事件都派发到按钮，手指移出边界也不会误触发 end。
-    try { if (e.pointerId != null) elTalkBtn.setPointerCapture(e.pointerId); } catch {}
-    elTalkBtn.classList.add("recording");
     elFinal.textContent = "";
     elPartial.textContent = "正在聆听…";
     send({ type: "start", format: { sampleRate: 16000, channels: 1, bits: 16 }, ts: Date.now() });
   } catch (err) {
     elPartial.textContent = "无法访问麦克风：" + err.message;
+    setHolding(false);
     cleanupAudio();
   }
 }
 
 function onTalkUp(e) {
-  if (!recording) return;
-  e.preventDefault();
-  recording = false;
   try {
     if (e.pointerId != null && elTalkBtn.hasPointerCapture?.(e.pointerId)) {
       elTalkBtn.releasePointerCapture(e.pointerId);
     }
   } catch {}
-  elTalkBtn.classList.remove("recording");
+  setHolding(false);
+  if (!recording) return; // 未配对时按了一下：上面已复位，这里直接收
+  e.preventDefault();
+  recording = false;
+  haptic(12);
+  // 松手的"发送"反馈：绿色闪一下
+  elTalkBtn.classList.add("sending");
+  setTimeout(() => elTalkBtn.classList.remove("sending"), 320);
   send({ type: "end", ts: Date.now() });
   // 不立刻停音频节点：让尾部几帧 PCM 也发出去。延后一点清理。
   setTimeout(cleanupAudio, 250);
@@ -257,6 +279,8 @@ function startMeter() {
     for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
     const rms = Math.sqrt(sum / buf.length);
     elMeterBar.style.width = Math.min(100, rms * 300) + "%";
+    // 把嗓音强度喂给按钮辉光（--level: 0..1），让它随你的声音"活"起来。
+    elTalkBtn.style.setProperty("--level", Math.min(1, rms * 3.4).toFixed(3));
     levelRAF = requestAnimationFrame(tick);
   };
   tick();

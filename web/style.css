@@ -55,18 +55,70 @@ h2 { font-size: 20px; margin: 0; align-self: flex-start; }
 .partial { color: var(--muted); font-size: 18px; min-height: 28px; }
 .final { color: var(--fg); font-size: 22px; font-weight: 600; }
 
-.talk-btn {
-  appearance: none; border: 0; cursor: pointer;
-  width: min(220px, 70vw); height: min(220px, 70vw); border-radius: 50%;
-  background: radial-gradient(circle at 50% 40%, var(--primary), var(--primary-2));
-  color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-  box-shadow: 0 10px 30px rgba(79,70,229,.4);
-  transition: transform .08s ease, box-shadow .2s ease;
-  user-select: none; touch-action: none;
+.talk-stage {
+  position: relative; display: grid; place-items: center;
+  width: min(264px, 78vw); height: min(264px, 78vw);
 }
-.talk-label { font-size: 22px; font-weight: 700; }
-.talk-sub { font-size: 12px; opacity: .8; }
-.talk-btn.recording { background: radial-gradient(circle at 50% 40%, #ef4444, #b91c1c); box-shadow: 0 10px 30px rgba(239,68,68,.5); transform: scale(1.03); }
+.talk-btn {
+  position: relative; z-index: 2; appearance: none; border: 0; cursor: pointer; padding: 0;
+  width: min(196px, 60vw); height: min(196px, 60vw); border-radius: 50%;
+  background: radial-gradient(circle at 50% 34%, #7c83ff, #4f46e5 72%);
+  color: #fff; overflow: hidden; isolation: isolate;
+  box-shadow: 0 14px 36px rgba(79,70,229,.45), inset 0 2px 6px rgba(255,255,255,.30), inset 0 -10px 22px rgba(49,46,129,.45);
+  transition: transform .13s cubic-bezier(.2,.85,.3,1), box-shadow .2s ease, background .2s ease;
+  -webkit-user-select: none; user-select: none; touch-action: none;
+}
+.talk-core { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 9px; pointer-events: none; }
+.talk-mic { width: 46px; height: 46px; filter: drop-shadow(0 2px 4px rgba(30,27,75,.4)); transition: transform .15s ease; }
+.talk-label { font-size: 17px; font-weight: 600; letter-spacing: .4px; }
+
+/* 体素级反馈：按下立即"陷进去" */
+.talk-btn:active { transform: scale(.94); }
+.talk-btn.holding {
+  transform: scale(.97);
+  background: radial-gradient(circle at 50% 34%, #a5b4fc, #4338ca 72%);
+  box-shadow: 0 6px 18px rgba(67,56,202,.55), inset 0 3px 12px rgba(30,27,75,.45), 0 0 0 10px rgba(129,140,248,.16);
+}
+.talk-btn.holding .talk-mic { transform: scale(1.08); }
+
+/* 跟随嗓音强度的辉光（JS 写入 --level: 0..1） */
+.talk-glow {
+  position: absolute; inset: -6%; z-index: 1; border-radius: 50%; opacity: 0;
+  background: radial-gradient(circle, rgba(199,210,254,.85), rgba(129,140,248,0) 62%);
+  transform: scale(1); transition: opacity .12s ease;
+}
+.talk-btn.holding .talk-glow {
+  opacity: calc(.30 + var(--level, 0) * .7);
+  transform: scale(calc(1 + var(--level, 0) * .18));
+}
+
+/* 声呐脉冲：按住时一圈圈往外扩，明确"在听" */
+.talk-pulse {
+  position: absolute; width: min(196px, 60vw); height: min(196px, 60vw);
+  border-radius: 50%; border: 2px solid rgba(129,140,248,.55); opacity: 0; z-index: 1;
+}
+.talk-btn.holding ~ .talk-pulse,
+.holding-stage .talk-pulse { animation: sonar 1.5s ease-out infinite; }
+.holding-stage .talk-pulse.d2 { animation-delay: .75s; }
+@keyframes sonar {
+  0% { transform: scale(.82); opacity: .55; }
+  100% { transform: scale(1.65); opacity: 0; }
+}
+
+/* 静止时极轻的"呼吸"，暗示可按 */
+.talk-btn:not(.holding) { animation: idleBreathe 3.4s ease-in-out infinite; }
+@keyframes idleBreathe {
+  0%, 100% { box-shadow: 0 14px 36px rgba(79,70,229,.40), inset 0 2px 6px rgba(255,255,255,.30), inset 0 -10px 22px rgba(49,46,129,.45); }
+  50% { box-shadow: 0 16px 42px rgba(99,102,241,.55), inset 0 2px 6px rgba(255,255,255,.30), inset 0 -10px 22px rgba(49,46,129,.45); }
+}
+
+/* 松手瞬间的"发送"反馈 */
+.talk-btn.sending { background: radial-gradient(circle at 50% 34%, #34d399, #059669 72%); }
+
+@media (prefers-reduced-motion: reduce) {
+  .talk-btn:not(.holding) { animation: none; }
+  .holding-stage .talk-pulse { animation: none; }
+}
 
 .status-line { display: flex; align-items: center; gap: 12px; }
 .meter { width: 120px; height: 6px; background: var(--bg-2); border-radius: 999px; overflow: hidden; display: inline-block; }

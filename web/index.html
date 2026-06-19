@@ -39,10 +39,21 @@
         <p id="partial" class="partial">按住下方按钮说话</p>
         <p id="final" class="final"></p>
       </div>
-      <button id="talkBtn" class="talk-btn" aria-label="按住说话">
-        <span class="talk-label">按住说话</span>
-        <span class="talk-sub">松开发送</span>
-      </button>
+      <div class="talk-stage">
+        <span class="talk-pulse" aria-hidden="true"></span>
+        <span class="talk-pulse d2" aria-hidden="true"></span>
+        <button id="talkBtn" class="talk-btn" aria-label="按住说话">
+          <span class="talk-glow" aria-hidden="true"></span>
+          <span class="talk-core">
+            <svg class="talk-mic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+              <path d="M5 11a7 7 0 0 0 14 0"></path>
+              <line x1="12" y1="18" x2="12" y2="22"></line>
+            </svg>
+            <span id="talkLabel" class="talk-label">按住说话</span>
+          </span>
+        </button>
+      </div>
       <div class="status-line">
         <span id="llmFlag" class="badge badge-muted">标点纠错：开</span>
         <span id="levelMeter" class="meter"><i></i></span>
