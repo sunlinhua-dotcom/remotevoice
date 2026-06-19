@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 设置存储
     private let defaults = UserDefaults.standard
     private var relayUrl: String {
-        get { defaults.string(forKey: "relayUrl") ?? "ws://localhost:8787/ws" }
+        get { RelayClient.resolveRelayURL(defaults.string(forKey: "relayUrl")) }
         set { defaults.set(newValue, forKey: "relayUrl") }
     }
 

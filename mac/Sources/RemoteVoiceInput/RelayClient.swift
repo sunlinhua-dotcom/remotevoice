@@ -5,6 +5,18 @@ import Foundation
 
 final class RelayClient: NSObject {
 
+    /// 默认中继地址：云端 Cloudflare（PWA 与中继同源）。个人自用固定只连这一台，写死即可，开箱即用、免手输。
+    static let defaultRelayURL = "wss://remotevoice-pwa.sunlinhua.workers.dev/ws"
+    /// 老版本的本地默认值；迁移成云端，省得已经跑过旧版的人还要去菜单手改。
+    static let legacyLocalRelayURL = "ws://localhost:8787/ws"
+
+    /// 解析要连的中继地址：用户显式设过别的就用它；没设过、或还停在老的 localhost 默认值，就用云端。
+    /// （本机调试想连 localhost，临时改这里的常量或在菜单填一个非 localhost 的地址即可。）
+    static func resolveRelayURL(_ stored: String?) -> String {
+        if let s = stored, !s.isEmpty, s != legacyLocalRelayURL { return s }
+        return defaultRelayURL
+    }
+
     enum State { case connecting, connected, disconnected }
 
     enum Event {

@@ -39,7 +39,7 @@ final class RVInputController: IMKInputController {
                 break
             }
         }
-        let url = UserDefaults.standard.string(forKey: "relayUrl") ?? "ws://localhost:8787/ws"
+        let url = RelayClient.resolveRelayURL(UserDefaults.standard.string(forKey: "relayUrl"))
         shared.connect(to: url)
     }
 
