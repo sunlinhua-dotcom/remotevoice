@@ -51,8 +51,7 @@ export class RelayHub {
   private pendingByCode = new Map<string, { macWs: WebSocket; expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
   private rooms = new Map<string, Room>();
   private pairFailsByIp = new Map<string, number[]>();
-  // 设备信任模型用：一次性扫码令牌（token → macId+过期），手机离线等待队列（macId → 手机连接）。
-  private pairTokens = new Map<string, { macId: string; expiresAt: number }>();
+  // 一次性扫码令牌存 SQLite（见 pair_tokens 表）；手机离线等待队列（macId → 手机连接）。
   private waitingPhones = new Map<string, Set<WebSocket>>();
   private llm: DoubaoLlm;
 
@@ -62,6 +61,10 @@ export class RelayHub {
     try {
       this.sql.exec(
         "CREATE TABLE IF NOT EXISTS devices (mac_id TEXT NOT NULL, token TEXT NOT NULL, name TEXT, created_at INTEGER, last_seen INTEGER, PRIMARY KEY (mac_id, token))",
+      );
+      // 扫码令牌也持久化：否则每次部署/DO 驱逐都会清空内存里的待用二维码令牌，导致已展示的二维码失效。
+      this.sql.exec(
+        "CREATE TABLE IF NOT EXISTS pair_tokens (token TEXT PRIMARY KEY, mac_id TEXT NOT NULL, expires_at INTEGER NOT NULL)",
       );
     } catch { /* sql 理论上必有；缺失则设备信任降级，不影响旧随机码流程 */ }
   }
@@ -457,13 +460,11 @@ export class RelayHub {
     let token = "";
     let issued = false;
     if (pairToken) {
-      // 首次配对：校验一次性扫码令牌
-      const pt = this.pairTokens.get(pairToken);
-      if (!pt || pt.macId !== macId || pt.expiresAt < Date.now()) {
-        if (pt) this.pairTokens.delete(pairToken);
+      // 首次配对：校验一次性扫码令牌（持久化在 SQLite，部署/驱逐都不丢）
+      const tokenMacId = this.takePairToken(pairToken);
+      if (!tokenMacId || tokenMacId !== macId) {
         return this.phonePairFail(client, "bad_pair", "二维码无效或已过期，请在 Mac 上重新生成");
       }
-      this.pairTokens.delete(pairToken);
       token = crypto.randomUUID().replace(/-/g, "");
       this.trustDevice(macId, token, name);
       issued = true;
@@ -517,10 +518,20 @@ export class RelayHub {
   private handleNewPairCode(client: ClientState): void {
     const macId = client.macId!;
     const now = Date.now();
-    for (const [t, v] of this.pairTokens) if (v.expiresAt < now) this.pairTokens.delete(t);
+    this.sql.exec("DELETE FROM pair_tokens WHERE expires_at < ?", now);   // 顺手清过期
     const token = crypto.randomUUID().replace(/-/g, "");
-    this.pairTokens.set(token, { macId, expiresAt: now + this.pairCodeTtlMs });
+    this.sql.exec("INSERT OR REPLACE INTO pair_tokens (token, mac_id, expires_at) VALUES (?, ?, ?)", token, macId, now + this.pairCodeTtlMs);
     this.send(client.ws, { type: "pair_code", token, ttl_ms: this.pairCodeTtlMs });
+  }
+
+  /** 取一次性扫码令牌：命中即删除（一次性），过期/不存在返回 null。 */
+  private takePairToken(token: string): string | null {
+    const rows = this.sql.exec("SELECT mac_id, expires_at FROM pair_tokens WHERE token = ?", token).toArray();
+    this.sql.exec("DELETE FROM pair_tokens WHERE token = ?", token);
+    if (!rows.length) return null;
+    const r: any = rows[0];
+    if (Number(r.expires_at) < Date.now()) return null;
+    return String(r.mac_id);
   }
 
   private handleRevokeDevice(client: ClientState, msg: any): void {
