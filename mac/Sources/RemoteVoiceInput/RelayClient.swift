@@ -88,6 +88,9 @@ final class RelayClient: NSObject {
     private var url: URL?
     private var pingTimer: Timer?
     private var receivedHello = false
+    private var reconnecting = false
+    // 线程纪律：task/url/receivedHello 等可变状态只在主线程读写。
+    // WS 的 receive/send 回调在后台队列触发，一律先 hop 回主线程再碰 self。
 
     override init() {
         super.init()
@@ -136,24 +139,27 @@ final class RelayClient: NSObject {
 
     // ---------- 接收循环 ----------
     private func listen() {
-        task?.receive { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let msg):
-                switch msg {
-                case .string(let s): self.handleText(s)
-                case .data(let d):
-                    if let s = String(data: d, encoding: .utf8) { self.handleText(s) }
-                @unknown default: break
+        let armed = task   // 记下这次 receive 绑定的 task；回调时若已不是当前 task（重连过）就丢弃
+        armed?.receive { [weak self] result in
+            // 回调在后台队列：先回主线程，再碰任何 self 的可变状态，避免与 connect/disconnect 竞争。
+            DispatchQueue.main.async {
+                guard let self, self.task === armed else { return }  // 忽略旧 task 的回调
+                switch result {
+                case .success(let msg):
+                    switch msg {
+                    case .string(let s): self.handleText(s)
+                    case .data(let d):
+                        if let s = String(data: d, encoding: .utf8) { self.handleText(s) }
+                    @unknown default: break
+                    }
+                    if !self.receivedHello {
+                        self.receivedHello = true
+                        self.onState?(.connected)
+                    }
+                    self.listen()
+                case .failure(let err):
+                    self.handleFailure(err)
                 }
-                // 首帧确认连接（hello 已在 connect() 时发出，这里只翻 UI 状态）
-                if !self.receivedHello {
-                    self.receivedHello = true
-                    DispatchQueue.main.async { self.onState?(.connected) }
-                }
-                self.listen()
-            case .failure(let err):
-                DispatchQueue.main.async { self.handleFailure(err) }
             }
         }
     }
@@ -229,12 +235,15 @@ final class RelayClient: NSObject {
         }
     }
 
+    // 始终在主线程调用（listen/sendText 的失败都已 hop 回主线程）。
     private func handleFailure(_ err: Error) {
         onState?(.disconnected)
-        // 自动重连
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak self] in
-            guard let self, let url = self.url else { return }
-            DispatchQueue.main.async { self.connect(to: url.absoluteString) }
+        guard !reconnecting else { return }   // 去抖：避免重连风暴叠加 connect()
+        reconnecting = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self else { return }
+            self.reconnecting = false
+            if let url = self.url { self.connect(to: url.absoluteString) }
         }
     }
 }
