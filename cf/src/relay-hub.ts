@@ -99,6 +99,7 @@ export class RelayHub {
     ws.accept();
     const id = `${ip.slice(-7)}-${crypto.randomUUID().slice(0, 4)}`;
     this.clients.set(ws, { ws, id, ip, failedPairs: 0 });
+    console.log("[relay] connect", id);
     ws.addEventListener("message", (ev: MessageEvent) => {
       if (typeof ev.data === "string") {
         this.handleText(ws, ev.data).catch(() => {});
@@ -158,6 +159,7 @@ export class RelayHub {
       }, this.pairCodeTtlMs);
       this.pendingByCode.set(code, { macWs: client.ws, expiresAt: Date.now() + this.pairCodeTtlMs, timer });
       this.send(client.ws, { type: "assign", code });
+      console.log("[relay] mac registered", client.id, "code=", code);
       this.pushStatus(client);
       return;
     }
@@ -178,6 +180,7 @@ export class RelayHub {
         }
         return;
       }
+      console.log("[relay] paired", room.code);
       if (room.macWs) this.send(room.macWs, { type: "paired", peer: "phone" });
       this.send(client.ws, { type: "paired", peer: "mac" });
       this.send(client.ws, { type: "config", llm_postprocess: room.llmPostprocess });

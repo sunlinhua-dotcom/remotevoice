@@ -61,13 +61,18 @@ npm run dev                 # tsx 热重载，监听 :8787，并托管 ../web
 
 **A. 后台听写 App（CGEvent 注入，开箱即用）**
 
+调试跑：`cd mac && swift run RemoteVoiceInput`。
+正式装成 `.app`（放进「应用程序」、可双击启动、默认连云端）：
+
 ```bash
 cd mac
-swift run RemoteVoiceInput
+./build-app.sh            # release 编译 + 打 .app + 签名 + 装到 /Applications
+open /Applications/RemoteVoiceInput.app
 ```
 
-首次运行需在 **系统设置 → 隐私与安全性 → 辅助功能** 授权（用于 CGEvent 注入）。
+首次启动会弹「辅助功能」授权（CGEvent 注入需要）：到 **系统设置 → 隐私与安全性 → 辅助功能** 打开 RemoteVoiceInput。
 状态栏出现 🎙 图标，菜单里可看到 6 位配对码、修改服务器地址、切换 LLM 后处理。
+> ad-hoc 签名：每次重新 `build-app.sh` 后辅助功能授权可能需要重开一次。
 
 **B. 原生输入法外壳（InputMethodKit，更"正统"的注入）**
 

@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -41,6 +42,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         client.onState = { [weak self] in self?.handleState($0) }
         client.onEvent = { [weak self] in self?.handleEvent($0) }
+
+        // 启动即请求“辅助功能”权限：没授权就弹系统授权框，并把本 App 主动注册进
+        // 「隐私与安全性 → 辅助功能」列表，用户一键开启即可（否则要等第一次说话才提示）。
+        if !AXIsProcessTrusted() {
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(opts)
+        }
 
         client.connect(to: relayUrl)
     }
