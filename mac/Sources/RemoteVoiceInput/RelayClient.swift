@@ -3,6 +3,41 @@
 
 import Foundation
 
+/// 这台 Mac 的稳定身份（房间）。首次生成随机 UUID 存 UserDefaults，之后恒定。
+enum MacIdentity {
+    static let defaultsKey = "rv.macId"
+    private static let lock = NSLock()
+    static var current: String {
+        lock.lock(); defer { lock.unlock() }
+        let d = UserDefaults.standard
+        if let existing = d.string(forKey: defaultsKey), !existing.isEmpty { return existing }
+        let fresh = UUID().uuidString
+        d.set(fresh, forKey: defaultsKey)
+        return fresh
+    }
+}
+
+/// 已配对的手机设备（来自中继 devices 列表）。
+struct Device: Identifiable, Equatable {
+    let id: String          // = 服务端 device token，吊销时回传
+    let name: String
+    let createdAt: TimeInterval
+    let lastSeen: TimeInterval
+
+    init?(json: [String: Any]) {
+        guard let id = (json["id"] as? String) ?? (json["token"] as? String) else { return nil }
+        self.id = id
+        self.name = (json["name"] as? String) ?? "手机"
+        self.createdAt = Device.num(json["createdAt"])
+        self.lastSeen = Device.num(json["lastSeen"])
+    }
+    private static func num(_ any: Any?) -> TimeInterval {
+        if let n = any as? NSNumber { return n.doubleValue }
+        if let s = any as? String, let v = TimeInterval(s) { return v }
+        return 0
+    }
+}
+
 final class RelayClient: NSObject {
 
     /// 默认中继地址：云端 Cloudflare（PWA 与中继同源）。个人自用固定只连这一台，写死即可，开箱即用、免手输。
@@ -20,14 +55,22 @@ final class RelayClient: NSObject {
     enum State { case connecting, connected, disconnected }
 
     enum Event {
-        case assign(String)         // 配对码
+        case assign(String)         // 配对码（旧随机码流程）
         case paired(String)         // peer = mac|phone
         case peerGone
         case config(Bool)           // llm_postprocess
         case partial(String)
         case final(String)
         case error(String)
+        // --- 设备信任 / 扫码配对 ---
+        case macReady(String)       // mac_id，房间就绪
+        case pairCode(token: String, ttlMs: Int)
+        case devices([Device])
+        case unpaired
     }
+
+    /// 设为非 nil 即启用「扫码 + 记住设备」新流程（菜单栏 App 用）；nil 则走旧随机码（IME 用）。
+    var macId: String?
 
     var onState: ((State) -> Void)?
     var onEvent: ((Event) -> Void)?
@@ -132,6 +175,18 @@ final class RelayClient: NSObject {
             case "asr_error":
                 let m = (obj["message"] as? String) ?? "识别异常"
                 self.onEvent?(.error(m))
+            case "mac_ready":
+                let id = (obj["mac_id"] as? String) ?? (obj["macId"] as? String) ?? ""
+                self.onEvent?(.macReady(id))
+            case "pair_code":
+                let token = (obj["token"] as? String) ?? ""
+                let ttl = (obj["ttl_ms"] as? NSNumber)?.intValue ?? 300_000
+                self.onEvent?(.pairCode(token: token, ttlMs: ttl))
+            case "devices":
+                let list = (obj["list"] as? [[String: Any]]) ?? []
+                self.onEvent?(.devices(list.compactMap(Device.init(json:))))
+            case "unpaired":
+                self.onEvent?(.unpaired)
             case "pong", "status": break
             default: break
             }
@@ -139,9 +194,25 @@ final class RelayClient: NSObject {
     }
 
     private func sendHello() {
-        // 仅发 hello。配对前发 config 会被中继当作 not_paired 丢弃，
-        // 真正的 LLM 开关在配对成功后由 AppDelegate 在 .paired 时下发。
-        send(["type": "hello", "role": "mac"])
+        // 菜单栏 App 设了 macId → 走设备信任新流程；否则旧随机码（IME）。
+        if let macId, !macId.isEmpty {
+            send(["type": "hello", "role": "mac", "macId": macId])
+        } else {
+            send(["type": "hello", "role": "mac"])
+        }
+    }
+
+    // ---------- 设备信任 / 扫码配对 便捷发送 ----------
+    func requestNewPairCode() { send(["type": "new_pair_code"]) }
+    func requestDeviceList() { send(["type": "list_devices"]) }
+    func revokeDevice(token: String) { send(["type": "revoke_device", "token": token]) }
+
+    /// 从 relayUrl（wss://host/ws）推导 https://host，给二维码拼网址用。
+    static func httpsHost(fromRelayURL relayUrl: String) -> String {
+        guard let u = URL(string: relayUrl), let host = u.host else { return relayUrl }
+        var s = "https://" + host
+        if let port = u.port { s += ":\(port)" }
+        return s
     }
 
     // ---------- 心跳与重连 ----------

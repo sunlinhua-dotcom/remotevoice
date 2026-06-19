@@ -26,11 +26,13 @@
     <!-- 配对面板 -->
     <section id="pairPanel" class="panel">
       <h1>RemoteVoice</h1>
-      <p class="hint">在 Mac 状态栏查看 6 位配对码，输入并配对</p>
-      <input id="codeInput" class="code-input" inputmode="numeric" maxlength="6"
-             placeholder="配对码" autocomplete="off" />
-      <button id="pairBtn" class="btn btn-primary">配对</button>
+      <p class="hint">在 Mac 菜单栏点「配对 / 设备…」，用手机相机扫一扫即可配对。配过一次后，以后自动连接，无需再扫。</p>
+      <button id="scanBtn" class="btn btn-primary">扫一扫</button>
       <p id="pairMsg" class="msg"></p>
+      <div id="scanBox" class="scan-box hidden">
+        <video id="scanVideo" playsinline muted></video>
+        <button id="scanCancel" class="btn">取消</button>
+      </div>
     </section>
 
     <!-- 主面板（配对成功后） -->

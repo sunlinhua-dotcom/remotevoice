@@ -45,6 +45,14 @@ h2 { font-size: 20px; margin: 0; align-self: flex-start; }
 }
 .code-input:focus { border-color: var(--primary); }
 
+/* 内置扫一扫取景框 */
+.scan-box { display: flex; flex-direction: column; align-items: center; gap: 12px; width: min(320px, 82vw); }
+.scan-box video {
+  width: 100%; aspect-ratio: 1 / 1; object-fit: cover;
+  background: #000; border-radius: var(--radius);
+  border: 2px solid var(--primary);
+}
+
 .btn { appearance: none; border: 0; cursor: pointer; padding: 14px 24px; border-radius: 12px; font-size: 16px; background: var(--bg-2); color: var(--fg); }
 .btn-primary { background: var(--primary); color: #fff; min-width: 180px; font-weight: 600; }
 .btn:active { transform: translateY(1px); }

@@ -25,7 +25,30 @@ let levelRAF = 0;
 // ---------- DOM ----------
 const elConn = $("connState"), elPeer = $("peerState");
 const elPairPanel = $("pairPanel"), elTalkPanel = $("talkPanel");
-const elCode = $("codeInput"), elPairBtn = $("pairBtn"), elPairMsg = $("pairMsg");
+const elScanBtn = $("scanBtn"), elPairMsg = $("pairMsg");
+const elScanBox = $("scanBox"), elScanVideo = $("scanVideo"), elScanCancel = $("scanCancel");
+
+// ---------- 配对凭证（设备信任）----------
+// 扫码得到的一次性令牌(URL ?m=&p=)，或本地记住的长期 device_token。
+const _params = new URLSearchParams(location.search);
+let pairMacId = _params.get("m");
+let pairToken = _params.get("p");
+let savedMacId = localStorage.getItem("rv.macId");
+let savedDeviceToken = localStorage.getItem("rv.deviceToken");
+
+function deviceName() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Android/.test(ua)) return "Android 手机";
+  if (/Macintosh/.test(ua)) return "Mac 浏览器";
+  return "手机";
+}
+function clearCreds() {
+  savedMacId = null; savedDeviceToken = null;
+  localStorage.removeItem("rv.macId");
+  localStorage.removeItem("rv.deviceToken");
+}
 const elTalkBtn = $("talkBtn"), elPartial = $("partial"), elFinal = $("final");
 const elTalkLabel = $("talkLabel"), elTalkStage = document.querySelector(".talk-stage");
 const elLlmFlag = $("llmFlag"), elMeter = $("levelMeter"), elMeterBar = elMeter.querySelector("i");
@@ -36,11 +59,8 @@ init();
 
 function init() {
   elRelayInput.value = relayUrl;
-  elPairBtn.onclick = doPair;
-  elCode.addEventListener("input", () => {
-    elCode.value = elCode.value.replace(/\D/g, "").slice(0, 6);
-  });
-  elCode.addEventListener("keydown", (e) => { if (e.key === "Enter") doPair(); });
+  elScanBtn.onclick = startScan;
+  elScanCancel.onclick = stopScan;
 
   // PTT：pointerdown/up（兼容鼠标+触摸）。
   // 不绑 pointerleave：录音中手指轻微移出按钮不应误判松手；改用 setPointerCapture 锁定指针。
@@ -89,7 +109,7 @@ function connect() {
     sock.binaryType = "arraybuffer";
     ws = sock;
     let settled = false;
-    sock.onopen = () => { setConn("已连接", "on"); settled = true; resolve(sock); };
+    sock.onopen = () => { setConn("已连接", "on"); settled = true; resolve(sock); tryAutoPair(); };
     sock.onclose = () => {
       setConn("未连接", "off");
       if (paired) showPair();
@@ -113,12 +133,27 @@ function onMessage(ev) {
     case "assign": // 给 mac 的，phone 忽略
       break;
     case "paired":
-      if (msg.peer === "mac") { paired = true; showTalk(); }
+      if (msg.peer === "mac") {
+        // 首次扫码配对：服务端下发长期 device_token，存本地，以后免扫码自动连。
+        if (msg.device_token) {
+          savedDeviceToken = msg.device_token;
+          savedMacId = msg.mac_id || pairMacId;
+          localStorage.setItem("rv.deviceToken", savedDeviceToken);
+          localStorage.setItem("rv.macId", savedMacId);
+          // 清掉 URL 里的一次性令牌，避免刷新重复使用。
+          try { history.replaceState(null, "", location.pathname); } catch {}
+          pairToken = null; pairMacId = savedMacId;
+        }
+        paired = true; elPairMsg.textContent = ""; showTalk();
+      }
       break;
     case "peer_gone":
-      paired = false; elPeer.textContent = "等待 Mac"; elPeer.className = "badge badge-muted";
-      showPair();
-      elPairMsg.textContent = "Mac 已断开，请重新配对";
+      // Mac 暂时离线，但本机仍是受信设备：保持已配对，等 Mac 回来自动续上。
+      elPeer.textContent = "等待 Mac"; elPeer.className = "badge badge-muted";
+      break;
+    case "unpaired":
+      paired = false; clearCreds(); showPair();
+      elPairMsg.textContent = "已被移除授权，请重新扫码配对";
       break;
     case "config":
       elLlmSwitch.checked = !!msg.llm_postprocess;
@@ -135,7 +170,16 @@ function onMessage(ev) {
       elPartial.textContent = "";
       break;
     case "error":
-      if (!paired) elPairMsg.textContent = msg.message || "出错了";
+      if (msg.code === "untrusted") {
+        // 本地存的设备凭证失效（被吊销/换了 Mac）→ 清掉，回到扫码。
+        paired = false; clearCreds(); showPair();
+        elPairMsg.textContent = "需要重新扫码配对";
+      } else if (msg.code === "bad_pair") {
+        showPair();
+        elPairMsg.textContent = "二维码已过期，请在 Mac 上重新生成";
+      } else if (!paired) {
+        elPairMsg.textContent = msg.message || "出错了";
+      }
       break;
     case "asr_error":
       elPartial.textContent = "识别异常：" + (msg.message || "");
@@ -149,19 +193,70 @@ function updateLlmFlag() {
   elLlmFlag.className = "badge " + (on ? "badge-on" : "badge-muted");
 }
 
-// ---------- 配对 ----------
-async function doPair() {
-  const code = elCode.value.trim();
-  if (code.length !== 6) { elPairMsg.textContent = "请输入 6 位配对码"; return; }
-  elPairMsg.textContent = "";
-  try {
-    if (!ws || ws.readyState !== WebSocket.OPEN) await connect();
-  } catch {
-    elPairMsg.textContent = "无法连接服务器";
+// ---------- 配对（设备信任）----------
+// 连接打开后自动调用：优先用刚扫到的一次性令牌；否则用本地记住的设备凭证；都没有就显示扫码界面。
+function tryAutoPair() {
+  if (pairMacId && pairToken) {
+    elPairMsg.textContent = "正在配对…";
+    send({ type: "hello", role: "phone", macId: pairMacId, pairToken, name: deviceName() });
+  } else if (savedMacId && savedDeviceToken) {
+    send({ type: "hello", role: "phone", macId: savedMacId, deviceToken: savedDeviceToken, name: deviceName() });
+  } else if (!paired) {
+    showPair();
+  }
+}
+
+async function pairNow() {
+  try { if (!ws || ws.readyState !== WebSocket.OPEN) await connect(); } catch { elPairMsg.textContent = "无法连接服务器"; return; }
+  tryAutoPair();
+}
+
+// ---------- 内置扫一扫（系统相机扫 URL 是主路径；这是兜底）----------
+let scanStream = null, scanRAF = 0, barcodeDetector = null;
+
+async function startScan() {
+  if (!("BarcodeDetector" in window)) {
+    elPairMsg.textContent = "此浏览器不支持内置扫码。请直接用手机相机扫 Mac 上的二维码。";
     return;
   }
-  send({ type: "hello", role: "phone", code });
-  // 等待 paired / error 回应
+  try {
+    barcodeDetector = barcodeDetector || new BarcodeDetector({ formats: ["qr_code"] });
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    elScanVideo.srcObject = scanStream;
+    await elScanVideo.play();
+    elScanBox.classList.remove("hidden");
+    elPairMsg.textContent = "对准 Mac 上的二维码";
+    scanLoop();
+  } catch (e) {
+    elPairMsg.textContent = "无法打开相机：" + (e.message || e);
+    stopScan();
+  }
+}
+
+async function scanLoop() {
+  if (!scanStream) return;
+  try {
+    const codes = await barcodeDetector.detect(elScanVideo);
+    const hit = codes.find((c) => c.rawValue && /[?&]m=/.test(c.rawValue) && /[?&]p=/.test(c.rawValue));
+    if (hit) { onScanned(hit.rawValue); return; }
+  } catch { /* 偶发检测异常，继续下一帧 */ }
+  scanRAF = requestAnimationFrame(scanLoop);
+}
+
+function onScanned(raw) {
+  stopScan();
+  try {
+    const u = new URL(raw);
+    const m = u.searchParams.get("m"), p = u.searchParams.get("p");
+    if (m && p) { pairMacId = m; pairToken = p; pairNow(); }
+    else elPairMsg.textContent = "二维码无效";
+  } catch { elPairMsg.textContent = "二维码无效"; }
+}
+
+function stopScan() {
+  if (scanRAF) { cancelAnimationFrame(scanRAF); scanRAF = 0; }
+  if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null; }
+  elScanBox.classList.add("hidden");
 }
 
 function showPair() {
