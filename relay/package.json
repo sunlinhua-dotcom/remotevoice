@@ -13,7 +13,8 @@
     "e2e:asr": "node --import tsx scripts/e2e-asr.mjs",
     "e2e:llm": "node --import tsx scripts/e2e-llm.mjs",
     "e2e:cf": "node scripts/e2e-cf.mjs",
-    "e2e:trust": "node scripts/e2e-trust.mjs"
+    "e2e:trust": "node scripts/e2e-trust.mjs",
+    "e2e:perm": "node scripts/e2e-perm.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
