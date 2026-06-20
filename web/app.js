@@ -185,10 +185,12 @@ function onMessage(ev) {
       break;
     case "partial":
       elPartial.textContent = msg.text || "";
+      dbgState.partial++; renderDbg();
       break;
     case "final":
       elFinal.textContent = msg.text || "";
       elPartial.textContent = "";
+      dbgState.final++; renderDbg();
       break;
     case "error":
       if (msg.code === "untrusted") {
@@ -206,6 +208,7 @@ function onMessage(ev) {
       break;
     case "asr_error":
       elPartial.textContent = "识别异常：" + (msg.message || "");
+      dbgState.err = (msg.message || "err").slice(0, 8); renderDbg();
       break;
   }
 }
@@ -347,9 +350,16 @@ async function onTalkDown(e) {
     // iOS Safari 关键兜底：MediaStream 必须挂到一个正在播放的(静音)媒体元素上，
     // 否则 AudioContext 的 MediaStreamSource 一直输出静音（采集帧在涨但峰值恒为 0）。
     try {
-      if (!micAudioEl) { micAudioEl = new Audio(); micAudioEl.muted = true; micAudioEl.setAttribute("playsinline", ""); }
+      if (!micAudioEl) {
+        micAudioEl = document.createElement("audio");
+        micAudioEl.muted = true;
+        micAudioEl.setAttribute("playsinline", "");
+        micAudioEl.setAttribute("autoplay", "");
+        micAudioEl.style.display = "none";
+        document.body.appendChild(micAudioEl);   // iOS 部分版本要求媒体元素在 DOM 里才激活流
+      }
       micAudioEl.srcObject = micStream;
-      micAudioEl.play().catch(() => {});
+      await micAudioEl.play().catch(() => {});
     } catch { /* ignore */ }
 
     // addModule 只做一次（iOS 上重复 addModule 同名 processor 可能静默失败）
@@ -373,12 +383,13 @@ async function onTalkDown(e) {
     workletNode.port.onmessage = (ev) => {
       const d = ev.data;
       if (d && d.dbg) { showDbg(d); return; }                     // 诊断帧（帧数/峰值/采样率）
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(d.buffer); // d 是 Int16Array PCM(16k)
+      if (ws && ws.readyState === WebSocket.OPEN) { ws.send(d.buffer); dbgState.sent++; } // d 是 Int16Array PCM(16k)
     };
 
     recording = true;
     elFinal.textContent = "";
     elPartial.textContent = "正在聆听…";
+    resetDbg();
     setDbg("采集中…");
     send({ type: "start", format: { sampleRate: 16000, channels: 1, bits: 16 }, ts: Date.now() });
   } catch (err) {
@@ -441,12 +452,19 @@ function stopMeter() {
   elMeterBar.style.width = "0%";
 }
 
-// ---------- 采集诊断（定位"采不到声音"卡在哪一环）----------
+// ---------- 全链路采集诊断（采集/发送/识别 一眼看穿）----------
+const dbgState = { frames: 0, peak: 0, rate: "?", sent: 0, partial: 0, final: 0, err: "" };
+function resetDbg() { dbgState.frames = 0; dbgState.peak = 0; dbgState.sent = 0; dbgState.partial = 0; dbgState.final = 0; dbgState.err = ""; renderDbg(); }
+function renderDbg() {
+  const el = $("dbg"); if (!el) return;
+  const s = dbgState;
+  el.textContent = `采${s.frames} 峰${s.peak.toFixed(3)} 发${s.sent} 收${s.partial}/${s.final}${s.err ? " ⚠" + s.err : ""} ${s.rate}k`;
+}
 function setDbg(t) { const el = $("dbg"); if (el) el.textContent = t; }
 function showDbg(d) {
-  const peak = (d.peak || 0);
-  const rate = audioCtx ? Math.round(audioCtx.sampleRate / 1000) : "?";
-  setDbg(`采集 ${d.frames} 帧 · 峰值 ${peak.toFixed(3)} · ${rate}kHz`);
+  dbgState.frames = d.frames; dbgState.peak = d.peak || 0;
+  dbgState.rate = audioCtx ? Math.round(audioCtx.sampleRate / 1000) : "?";
+  renderDbg();
 }
 
 // 启动即连接（等待用户输入配对码）
