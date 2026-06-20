@@ -178,10 +178,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DictationHUD.shared.showPartial(text)
         case .final(let text):
             updateIcon(.standby)
-            DictationHUD.shared.showFinal(text)
-            if !text.isEmpty {
+            if text.isEmpty {
+                DictationHUD.shared.hide()
+            } else {
                 lastTextItem.title = "最近：\(text)"
-                injector.inject(text)
+                let typed = injector.inject(text)   // 有输入框→打字；否则存剪贴板
+                DictationHUD.shared.showFinal(typed ? text : "📋 已复制：\(text)")
             }
         case .error(let msg):
             DictationHUD.shared.showFinal("⚠️ \(msg)")

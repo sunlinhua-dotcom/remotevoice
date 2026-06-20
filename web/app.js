@@ -16,6 +16,7 @@ let paired = false;
 let audioCtx = null;
 let micStream = null;
 let workletNode = null;
+let sinkNode = null;
 let recording = false;
 
 // 音量电平
@@ -336,7 +337,12 @@ async function onTalkDown(e) {
 
     const src = audioCtx.createMediaStreamSource(micStream);
     src.connect(workletNode);
-    // 不接 destination，避免回声
+    // 关键：必须把 worklet 接到 destination，否则 iOS Safari 不会"拉"这条音频图、
+    // process() 永远不跑、采不到声音。用 gain=0 的静音节点接出去，既驱动了图又不产生回声。
+    sinkNode = audioCtx.createGain();
+    sinkNode.gain.value = 0;
+    workletNode.connect(sinkNode);
+    sinkNode.connect(audioCtx.destination);
 
     // 音量电平
     analyser = audioCtx.createAnalyser();
@@ -383,7 +389,9 @@ function cleanupAudio() {
   stopMeter();
   try { workletNode?.port.postMessage({ cmd: "stop" }); } catch {}
   try { workletNode?.disconnect(); } catch {}
+  try { sinkNode?.disconnect(); } catch {}
   workletNode = null;
+  sinkNode = null;
   micStream?.getTracks().forEach((t) => t.stop());
   micStream = null;
   analyser = null;

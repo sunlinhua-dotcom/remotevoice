@@ -71,9 +71,14 @@ h2 { font-size: 20px; margin: 0; align-self: flex-start; }
 
 .msg { min-height: 20px; color: var(--muted); font-size: 13px; }
 
-.live { min-height: 120px; max-width: 100%; }
-.partial { color: var(--muted); font-size: 18px; min-height: 28px; }
-.final { color: var(--fg); font-size: 22px; font-weight: 600; }
+/* 识别文字区在顶部 */
+.live { width: 100%; display: flex; flex-direction: column; gap: 10px; padding-top: 5vh; }
+.final { color: var(--fg); font-size: 26px; font-weight: 600; line-height: 1.45; min-height: 36px; }
+.partial { color: var(--muted); font-size: 20px; min-height: 28px; line-height: 1.5; }
+
+/* 说话按钮整体推到下半部分 */
+#talkPanel.talk { justify-content: flex-start; padding: 20px 18px; gap: 0; }
+.talk-bottom { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 18px; padding-bottom: 6vh; }
 
 .talk-stage {
   position: relative; display: grid; place-items: center;
@@ -95,11 +100,15 @@ h2 { font-size: 20px; margin: 0; align-self: flex-start; }
 /* 体素级反馈：按下立即"陷进去" */
 .talk-btn:active { transform: scale(.94); }
 .talk-btn.holding {
-  transform: scale(.97);
-  background: radial-gradient(circle at 50% 34%, #a5b4fc, #4338ca 72%);
-  box-shadow: 0 6px 18px rgba(67,56,202,.55), inset 0 3px 12px rgba(30,27,75,.45), 0 0 0 10px rgba(129,140,248,.16);
+  background: radial-gradient(circle at 50% 32%, #c7d2fe, #4f46e5 70%);
+  animation: holdPulse 1s ease-in-out infinite;
 }
-.talk-btn.holding .talk-mic { transform: scale(1.08); }
+@keyframes holdPulse {
+  0%, 100% { transform: scale(1.03); box-shadow: 0 0 0 12px rgba(129,140,248,.20), 0 0 36px 6px rgba(129,140,248,.5), inset 0 3px 14px rgba(255,255,255,.35); }
+  50%      { transform: scale(1.08); box-shadow: 0 0 0 20px rgba(129,140,248,.26), 0 0 56px 14px rgba(165,180,252,.7), inset 0 3px 14px rgba(255,255,255,.42); }
+}
+.talk-btn.holding .talk-mic { transform: scale(1.12); }
+.talk-btn.holding .talk-label { letter-spacing: 1px; }
 
 /* 跟随嗓音强度的辉光（JS 写入 --level: 0..1） */
 .talk-glow {
@@ -115,14 +124,14 @@ h2 { font-size: 20px; margin: 0; align-self: flex-start; }
 /* 声呐脉冲：按住时一圈圈往外扩，明确"在听" */
 .talk-pulse {
   position: absolute; width: min(196px, 60vw); height: min(196px, 60vw);
-  border-radius: 50%; border: 2px solid rgba(129,140,248,.55); opacity: 0; z-index: 1;
+  border-radius: 50%; border: 3px solid rgba(165,180,252,.6); opacity: 0; z-index: 1;
 }
-.talk-btn.holding ~ .talk-pulse,
-.holding-stage .talk-pulse { animation: sonar 1.5s ease-out infinite; }
-.holding-stage .talk-pulse.d2 { animation-delay: .75s; }
+.holding-stage .talk-pulse { animation: sonar 1.4s ease-out infinite; }
+.holding-stage .talk-pulse.d2 { animation-delay: .47s; }
+.holding-stage .talk-pulse.d3 { animation-delay: .94s; }
 @keyframes sonar {
-  0% { transform: scale(.82); opacity: .55; }
-  100% { transform: scale(1.65); opacity: 0; }
+  0% { transform: scale(.85); opacity: .7; }
+  100% { transform: scale(1.95); opacity: 0; }
 }
 
 /* 静止时极轻的"呼吸"，暗示可按 */

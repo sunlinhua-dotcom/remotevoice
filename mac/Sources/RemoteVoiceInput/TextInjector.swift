@@ -6,23 +6,72 @@
 // 代理对（emoji 等）按 UTF-16 代理对发送。
 
 import AppKit
+import ApplicationServices
 import CoreGraphics
 
 final class TextInjector {
 
-    /// 把整段文字"打"到当前焦点窗口。
-    func inject(_ text: String) {
+    /// 把整段文字送达：
+    ///  - 当前焦点是可编辑文本框，或前台是远程桌面/转发类 App（被控端有输入框）→ 用 CGEvent 直接打字。
+    ///  - 否则（没有输入框）→ 存进剪贴板，用户可手动粘贴。
+    /// 返回 true = 已注入打字；false = 已复制到剪贴板。
+    @discardableResult
+    func inject(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
         guard AXIsProcessTrusted() else {
-            // 辅助功能未授权：弹一次提示，引导用户到设置。
             promptAccessibility()
-            return
+            copyToClipboard(text)   // 没权限也别丢字，先放剪贴板
+            return false
         }
+        if shouldType() {
+            cgType(text)
+            return true
+        } else {
+            copyToClipboard(text)
+            return false
+        }
+    }
 
+    /// 是否应该"打字"（而不是存剪贴板）。
+    private func shouldType() -> Bool {
+        // 1) 系统焦点是可编辑文本元素？
+        let sys = AXUIElementCreateSystemWide()
+        var focused: CFTypeRef?
+        if AXUIElementCopyAttributeValue(sys, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+           let el = focused, CFGetTypeID(el) == AXUIElementGetTypeID() {
+            let element = el as! AXUIElement
+            var roleObj: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleObj)
+            let role = (roleObj as? String) ?? ""
+            let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+            if textRoles.contains(role) { return true }
+            var settable: DarwinBoolean = false
+            if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue {
+                return true
+            }
+        }
+        // 2) 前台是远程桌面/转发类 App（焦点在它的窗口，真正的输入框在被控端）→ 也打字。
+        if let app = NSWorkspace.shared.frontmostApplication {
+            let name = (app.localizedName ?? "").lowercased()
+            let bid = (app.bundleIdentifier ?? "").lowercased()
+            let keys = ["远程", "向日葵", "uu", "todesk", "rustdesk", "parsec", "vnc",
+                        "anydesk", "teamviewer", "splashtop", "remote", "镜像"]
+            if keys.contains(where: { !$0.isEmpty && (name.contains($0) || bid.contains($0)) }) { return true }
+        }
+        return false
+    }
+
+    private func copyToClipboard(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
+    /// 用 CGEvent 把整段文字"打"到当前焦点窗口（经远程转发可落到被控主机）。
+    private func cgType(_ text: String) {
         let src = CGEventSource(stateID: .hidSystemState)
         guard let event = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true) else { return }
-
-        // 按 Unicode 标量边界分块（每块 ≤10 个 UTF-16 单元），保证代理对（emoji 等）
-        // 不会被切到两个 CGEvent，否则单独的高/低代理是非法 UTF-16，字符会丢失或乱码。
+        // 按 Unicode 标量边界分块（每块 ≤10 个 UTF-16 单元），保证代理对（emoji 等）不被切断。
         for units in chunkedScalars(text, size: 10) {
             event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
             event.type = .keyDown
