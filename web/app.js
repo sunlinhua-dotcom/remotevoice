@@ -342,7 +342,8 @@ async function onTalkDown(e) {
     const [, stream] = await Promise.all([
       audioCtx.state === "suspended" ? audioCtx.resume() : Promise.resolve(),
       navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        // 开 AGC/NS 把电平归一化（之前关掉导致 iOS 上电平极低 ~0.03，豆包听成静音）；EC 不需要(PTT 无外放回声)。
+        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: true, autoGainControl: true },
       }),
     ]);
     micStream = stream;

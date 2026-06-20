@@ -38,6 +38,7 @@ class PcmPump extends AudioWorkletProcessor {
       const idx = Math.floor(this.pos);
       const frac = this.pos - idx;
       let s = ch[idx] * (1 - frac) + ch[idx + 1] * frac;
+      s *= 3; // 软件增益：补偿 iOS 偏低的麦克风电平（配合 AGC）；下面再钳位防爆。
       if (s > 1) s = 1; else if (s < -1) s = -1;
       const a = s < 0 ? -s : s;
       if (a > this.dbgPeak) this.dbgPeak = a;
