@@ -334,20 +334,22 @@ async function onTalkDown(e) {
   // 2) 真正起录音
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") await audioCtx.resume();
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
+    // resume 与 getUserMedia 并行发起；iOS 上 EC/NS/AGC 常把麦克风路由成静音，先全关。
+    const [, stream] = await Promise.all([
+      audioCtx.state === "suspended" ? audioCtx.resume() : Promise.resolve(),
+      navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      }),
+    ]);
+    micStream = stream;
 
-    await audioCtx.audioWorklet.addModule("/pcm-worker.js");
-    workletNode = new AudioWorkletNode(audioCtx, "pcm-pump", {
-      processorOptions: { targetRate: 16000 },
-    });
+    // addModule 只做一次（iOS 上重复 addModule 同名 processor 可能静默失败）
+    if (!audioCtx._rvModule) { await audioCtx.audioWorklet.addModule("/pcm-worker.js"); audioCtx._rvModule = true; }
+    workletNode = new AudioWorkletNode(audioCtx, "pcm-pump", { processorOptions: { targetRate: 16000 } });
 
     const src = audioCtx.createMediaStreamSource(micStream);
     src.connect(workletNode);
-    // 关键：必须把 worklet 接到 destination，否则 iOS Safari 不会"拉"这条音频图、
-    // process() 永远不跑、采不到声音。用 gain=0 的静音节点接出去，既驱动了图又不产生回声。
+    // 必须把 worklet 接到 destination（经 gain=0 静音），否则 iOS 不拉音频图、process() 不跑、采不到声音。
     sinkNode = audioCtx.createGain();
     sinkNode.gain.value = 0;
     workletNode.connect(sinkNode);
@@ -360,16 +362,18 @@ async function onTalkDown(e) {
     startMeter();
 
     workletNode.port.onmessage = (ev) => {
-      // ev.data = Int16Array PCM(16k)
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(ev.data.buffer);
+      const d = ev.data;
+      if (d && d.dbg) { showDbg(d); return; }                     // 诊断帧（帧数/峰值/采样率）
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(d.buffer); // d 是 Int16Array PCM(16k)
     };
 
     recording = true;
     elFinal.textContent = "";
     elPartial.textContent = "正在聆听…";
+    setDbg("采集中…");
     send({ type: "start", format: { sampleRate: 16000, channels: 1, bits: 16 }, ts: Date.now() });
   } catch (err) {
-    elPartial.textContent = "无法访问麦克风：" + err.message;
+    elPartial.textContent = "无法访问麦克风：" + (err && err.message ? err.message : err);
     setHolding(false);
     cleanupAudio();
   }
@@ -425,6 +429,14 @@ function stopMeter() {
   if (levelRAF) cancelAnimationFrame(levelRAF);
   levelRAF = 0;
   elMeterBar.style.width = "0%";
+}
+
+// ---------- 采集诊断（定位"采不到声音"卡在哪一环）----------
+function setDbg(t) { const el = $("dbg"); if (el) el.textContent = t; }
+function showDbg(d) {
+  const peak = (d.peak || 0);
+  const rate = audioCtx ? Math.round(audioCtx.sampleRate / 1000) : "?";
+  setDbg(`采集 ${d.frames} 帧 · 峰值 ${peak.toFixed(3)} · ${rate}kHz`);
 }
 
 // 启动即连接（等待用户输入配对码）
