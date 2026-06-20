@@ -120,8 +120,17 @@ function connect() {
     sock.binaryType = "arraybuffer";
     ws = sock;
     let settled = false;
-    sock.onopen = () => { setConn("已连接", "on"); settled = true; resolve(sock); tryAutoPair(); };
+    // 连接超时：8 秒还没 open（多半是网络/代理把 wss 掐了），给明确提示而不是一直"连接中…"。
+    const connectTimeout = setTimeout(() => {
+      if (sock.readyState !== WebSocket.OPEN) {
+        setConn("连不上服务器", "off");
+        if (!paired) elPairMsg.textContent = "连不上服务器——检查网络/代理（workers.dev 在国内常需科学上网）";
+        try { sock.close(); } catch {}
+      }
+    }, 8000);
+    sock.onopen = () => { clearTimeout(connectTimeout); setConn("已连接", "on"); settled = true; resolve(sock); tryAutoPair(); };
     sock.onclose = () => {
+      clearTimeout(connectTimeout);
       setConn("未连接", "off");
       if (paired) showPair();
       if (ws === sock) ws = null;       // 仅当它仍是当前活动 socket 才清空
