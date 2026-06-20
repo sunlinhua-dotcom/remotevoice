@@ -158,6 +158,10 @@ export class RelayHub {
       case "end":
         if (client.role !== "phone") return;
         return this.handleEnd(client);
+      case "inject_text":
+        // 已转写好的文字直接送达（飞书等非实时来源用）：跳过 ASR，直接当作 final 广播给 mac 注入。
+        if (client.role !== "phone") return;
+        return this.handleInjectText(client, msg);
       case "config":
         if (client.role !== "mac") return;
         return this.handleConfig(client, msg);
@@ -312,6 +316,22 @@ export class RelayHub {
   private handleEnd(client: ClientState): void {
     const room = this.rooms.get(client.roomCode!);
     room?.asr?.finishAudio();
+  }
+
+  /** 已转写文字直接注入：当作 final 广播给房间（mac 端走既有 final→注入逻辑，无需改 Mac App）。 */
+  private async handleInjectText(client: ClientState, msg: any): Promise<void> {
+    const room = this.rooms.get(client.roomCode!);
+    if (!room) return;
+    const raw = typeof msg.text === "string" ? msg.text.trim() : "";
+    if (!raw) return;
+    let text = raw;
+    let usedLlm = false;
+    if (room.llmPostprocess && this.llm.enabled) {
+      const r = await this.llm.postprocess(raw);
+      text = r.text;
+      usedLlm = r.ok;
+    }
+    this.broadcast(room, { type: "final", text, raw, llm: usedLlm });
   }
 
   private handleConfig(client: ClientState, msg: any): void {
