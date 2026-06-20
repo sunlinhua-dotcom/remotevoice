@@ -17,6 +17,7 @@ let audioCtx = null;
 let micStream = null;
 let workletNode = null;
 let sinkNode = null;
+let micAudioEl = null;   // iOS 兜底：把麦克风流挂到它上面"激活"，否则 source 一直静音
 let recording = false;
 
 // 音量电平
@@ -343,6 +344,14 @@ async function onTalkDown(e) {
     ]);
     micStream = stream;
 
+    // iOS Safari 关键兜底：MediaStream 必须挂到一个正在播放的(静音)媒体元素上，
+    // 否则 AudioContext 的 MediaStreamSource 一直输出静音（采集帧在涨但峰值恒为 0）。
+    try {
+      if (!micAudioEl) { micAudioEl = new Audio(); micAudioEl.muted = true; micAudioEl.setAttribute("playsinline", ""); }
+      micAudioEl.srcObject = micStream;
+      micAudioEl.play().catch(() => {});
+    } catch { /* ignore */ }
+
     // addModule 只做一次（iOS 上重复 addModule 同名 processor 可能静默失败）
     if (!audioCtx._rvModule) { await audioCtx.audioWorklet.addModule("/pcm-worker.js"); audioCtx._rvModule = true; }
     workletNode = new AudioWorkletNode(audioCtx, "pcm-pump", { processorOptions: { targetRate: 16000 } });
@@ -403,6 +412,7 @@ function cleanupAudio() {
   try { workletNode?.port.postMessage({ cmd: "stop" }); } catch {}
   try { workletNode?.disconnect(); } catch {}
   try { sinkNode?.disconnect(); } catch {}
+  try { if (micAudioEl) { micAudioEl.pause(); micAudioEl.srcObject = null; } } catch {}
   workletNode = null;
   sinkNode = null;
   micStream?.getTracks().forEach((t) => t.stop());
