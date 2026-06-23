@@ -32,3 +32,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# 配图渲染脚手架（HTML 源，本地保留）
+docs/images/_*.html
