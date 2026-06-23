@@ -1,0 +1,15 @@
+{
+  "name": "remotevoice-feishu",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "飞书机器人「远程语音」监听器：收语音 → 转写 → 经中继注入到 Mac",
+  "scripts": {
+    "start": "node listener.mjs"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.50.0",
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  }
+}

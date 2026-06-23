@@ -176,14 +176,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .partial(let text):
             updateIcon(.recording)
             DictationHUD.shared.showPartial(text)
-        case .final(let text):
+        case .final(let text, let injectId):
             updateIcon(.standby)
             if text.isEmpty {
                 DictationHUD.shared.hide()
             } else {
                 lastTextItem.title = "最近：\(text)"
-                let typed = injector.inject(text)   // 有输入框→打字；否则存剪贴板
-                DictationHUD.shared.showFinal(typed ? text : "📋 已复制：\(text)")
+                let outcome = injector.inject(text)   // 有输入框→打字；否则存剪贴板
+                switch outcome {
+                case .typed:  DictationHUD.shared.showFinal(text)
+                case .copied: DictationHUD.shared.showFinal("📋 已复制：\(text)")
+                case .failed: DictationHUD.shared.showFinal("⚠️ 注入失败：\(text)")
+                }
+                // 把真实注入结果回执给中继（中继再透传回飞书/手机），让回执不再瞎报「已注入」。
+                if let injectId {
+                    client.send(["type": "inject_ack", "id": injectId, "ok": outcome.ok, "mode": outcome.mode])
+                }
+            }
+        case .key(let key, let injectId):
+            let outcome = injector.pressKey(key)
+            if outcome.ok { DictationHUD.shared.showFinal("⏎ 回车") }
+            if let injectId {
+                client.send(["type": "inject_ack", "id": injectId, "ok": outcome.ok, "mode": outcome.ok ? "key" : "failed"])
             }
         case .error(let msg):
             DictationHUD.shared.showFinal("⚠️ \(msg)")

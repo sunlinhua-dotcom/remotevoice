@@ -53,6 +53,9 @@ export class RelayHub {
   private pairFailsByIp = new Map<string, number[]>();
   // 一次性扫码令牌存 SQLite（见 pair_tokens 表）；手机离线等待队列（macId → 手机连接）。
   private waitingPhones = new Map<string, Set<WebSocket>>();
+  // 临时图片中转：飞书监听器 HTTP 上传图片 → 拿短链 URL，给被控主机用（绕开不稳的 UU 图片剪贴板）。
+  // 存 DO 内存、带 TTL，用完即弃（不持久化；DO 重启会清，仅供"上传后即用"）。
+  private images = new Map<string, { bytes: ArrayBuffer; mime: string; expires: number }>();
   private llm: DoubaoLlm;
 
   constructor(private state: DurableObjectState, private env: Env) {
@@ -105,6 +108,13 @@ export class RelayHub {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
       return Response.json({ ok: true, rooms: this.rooms.size, llm: this.llm.enabled });
+    }
+    // 图片临时中转：POST /i 上传（返回 {id}），GET /i/<id>取回。给被控主机当图片 URL 兜底。
+    if (url.pathname === "/i" && request.method === "POST") {
+      return this.handleImageUpload(request);
+    }
+    if (url.pathname.startsWith("/i/") && request.method === "GET") {
+      return this.handleImageServe(url.pathname.slice(3));
     }
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected websocket", { status: 426 });
@@ -162,6 +172,14 @@ export class RelayHub {
         // 已转写好的文字直接送达（飞书等非实时来源用）：跳过 ASR，直接当作 final 广播给 mac 注入。
         if (client.role !== "phone") return;
         return this.handleInjectText(client, msg);
+      case "inject_key":
+        // 注入一个按键（如回车）到 Mac 当前窗口——卡片按钮触发，用于"提交"。
+        if (client.role !== "phone") return;
+        return this.handleInjectKey(client, msg);
+      case "inject_ack":
+        // Mac 注入后回执真实结果（打字/剪贴板/失败），中继透传回发起注入的手机。
+        if (client.role !== "mac") return;
+        return this.handleInjectAck(client, msg);
       case "config":
         if (client.role !== "mac") return;
         return this.handleConfig(client, msg);
@@ -318,20 +336,54 @@ export class RelayHub {
     room?.asr?.finishAudio();
   }
 
-  /** 已转写文字直接注入：当作 final 广播给房间（mac 端走既有 final→注入逻辑，无需改 Mac App）。 */
+  /** 已转写文字直接注入：当作 final 广播给房间（mac 端走既有 final→注入逻辑，无需改 Mac App）。
+   *  发起方（手机/飞书）会收到一条 inject_result，如实反映「是否送达了在线的 Mac」，
+   *  避免 Mac 离线时静默丢弃却回执成功。 */
   private async handleInjectText(client: ClientState, msg: any): Promise<void> {
+    const id = msg.id;
     const room = this.rooms.get(client.roomCode!);
-    if (!room) return;
+    if (!room) { this.send(client.ws, { type: "inject_result", id, ok: false, reason: "no_room" }); return; }
     const raw = typeof msg.text === "string" ? msg.text.trim() : "";
-    if (!raw) return;
+    if (!raw) { this.send(client.ws, { type: "inject_result", id, ok: false, reason: "empty" }); return; }
+    // Mac 不在线 → 不静默丢弃，如实回执（顺带省掉无谓的 LLM 调用）。
+    if (!room.macWs) { this.send(client.ws, { type: "inject_result", id, ok: false, reason: "mac_offline" }); return; }
     let text = raw;
     let usedLlm = false;
-    if (room.llmPostprocess && this.llm.enabled) {
+    // 已成文文字（postprocess:false，如用户在飞书手打）默认不再 LLM 改写，避免篡改原文；
+    // 只有语音转写（postprocess 缺省或 true）才补标点纠错。
+    const wantLlm = msg.postprocess !== false && room.llmPostprocess && this.llm.enabled;
+    if (wantLlm) {
       const r = await this.llm.postprocess(raw);
       text = r.text;
       usedLlm = r.ok;
     }
-    this.broadcast(room, { type: "final", text, raw, llm: usedLlm });
+    // final 带上 id：Mac 注入后用同一 id 回 inject_ack，中继再透传为 inject_result 给手机。
+    // 在线时不在此立刻回执，等 Mac 的真实结果（见 handleInjectAck）；listener 侧有超时兜底。
+    this.broadcast(room, { type: "final", id, text, raw, llm: usedLlm });
+  }
+
+  /** 注入一个按键（enter/tab/esc…）到 Mac 当前窗口。Mac 注入后回 inject_ack，复用 handleInjectAck 透传。 */
+  private handleInjectKey(client: ClientState, msg: any): void {
+    const id = msg.id;
+    const room = this.rooms.get(client.roomCode!);
+    if (!room) { this.send(client.ws, { type: "inject_result", id, ok: false, reason: "no_room" }); return; }
+    const key = typeof msg.key === "string" ? msg.key.trim() : "";
+    if (!key) { this.send(client.ws, { type: "inject_result", id, ok: false, reason: "empty" }); return; }
+    if (!room.macWs) { this.send(client.ws, { type: "inject_result", id, ok: false, reason: "mac_offline" }); return; }
+    this.send(room.macWs, { type: "key", id, key });
+  }
+
+  /** Mac 注入后回执真实结果（打字/剪贴板/失败），透传回发起注入的手机（飞书 listener）。 */
+  private handleInjectAck(client: ClientState, msg: any): void {
+    const room = this.rooms.get(client.roomCode!);
+    if (!room?.phoneWs) return;
+    this.send(room.phoneWs, {
+      type: "inject_result",
+      id: msg.id,
+      ok: !!msg.ok,
+      mode: typeof msg.mode === "string" ? msg.mode : undefined,
+      delivered: true,
+    });
   }
 
   private handleConfig(client: ClientState, msg: any): void {
@@ -422,6 +474,39 @@ export class RelayHub {
     if (arr.length === 0) this.pairFailsByIp.delete(ip);
     else this.pairFailsByIp.set(ip, arr);
     return arr.length >= PAIR_FAIL_MAX_PER_IP;
+  }
+
+  // ---------- 图片临时中转 ----------
+  private async handleImageUpload(request: Request): Promise<Response> {
+    const mime = request.headers.get("Content-Type") || "image/png";
+    const bytes = await request.arrayBuffer();
+    if (bytes.byteLength === 0 || bytes.byteLength > 20 * 1024 * 1024) {
+      return new Response("bad image", { status: 400 });
+    }
+    this.pruneImages();
+    const id = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    this.images.set(id, { bytes, mime, expires: Date.now() + 30 * 60_000 });
+    return Response.json({ id });
+  }
+
+  private handleImageServe(id: string): Response {
+    const it = this.images.get(id);
+    if (!it || it.expires < Date.now()) {
+      this.images.delete(id);
+      return new Response("not found or expired", { status: 404 });
+    }
+    return new Response(it.bytes, {
+      headers: { "Content-Type": it.mime, "Cache-Control": "private, max-age=1800" },
+    });
+  }
+
+  private pruneImages(): void {
+    const now = Date.now();
+    for (const [k, v] of this.images) if (v.expires < now) this.images.delete(k);
+    if (this.images.size > 50) {              // 防内存膨胀：超 50 张删最旧
+      let excess = this.images.size - 50;
+      for (const k of this.images.keys()) { if (excess-- <= 0) break; this.images.delete(k); }
+    }
   }
 
   // ---------- 辅助 ----------

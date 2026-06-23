@@ -48,8 +48,9 @@ struct Device: Identifiable, Equatable {
 
 final class RelayClient: NSObject {
 
-    /// 默认中继地址：云端 Cloudflare（PWA 与中继同源）。个人自用固定只连这一台，写死即可，开箱即用、免手输。
-    static let defaultRelayURL = "wss://remotevoice-pwa.sunlinhua.workers.dev/ws"
+    /// 默认中继地址：占位符——请改成你自己部署的 Cloudflare Worker 域名（见 REPRODUCE.md 第 3 步），
+    /// 或启动后在 App 菜单「服务器地址」里填一次（存 UserDefaults，优先于此默认值，rebuild 不丢）。
+    static let defaultRelayURL = "wss://YOUR-WORKER-SUBDOMAIN.workers.dev/ws"
     /// 老版本的本地默认值；迁移成云端，省得已经跑过旧版的人还要去菜单手改。
     static let legacyLocalRelayURL = "ws://localhost:8787/ws"
 
@@ -68,7 +69,8 @@ final class RelayClient: NSObject {
         case peerGone
         case config(Bool)           // llm_postprocess
         case partial(String)
-        case final(String)
+        case final(String, String?)   // text, 注入 id（来自 inject_text，注入后回 ack 用；实时 ASR 无 id）
+        case key(String, String?)     // 按键名（enter/tab/esc…）, 注入 id
         case error(String)
         // --- 设备信任 / 扫码配对 ---
         case macReady(String)       // mac_id，房间就绪
@@ -89,6 +91,7 @@ final class RelayClient: NSObject {
     private var pingTimer: Timer?
     private var receivedHello = false
     private var reconnecting = false
+    private var lastSeenAt = Date()   // 最近一次收到任何入站消息（含 pong）；心跳看门狗判半开死连用
     // 线程纪律：task/url/receivedHello 等可变状态只在主线程读写。
     // WS 的 receive/send 回调在后台队列触发，一律先 hop 回主线程再碰 self。
 
@@ -105,6 +108,7 @@ final class RelayClient: NSObject {
         }
         url = u
         receivedHello = false
+        lastSeenAt = Date()
         onState?(.connecting)
         let t = session.webSocketTask(with: u)
         task = t
@@ -146,6 +150,7 @@ final class RelayClient: NSObject {
                 guard let self, self.task === armed else { return }  // 忽略旧 task 的回调
                 switch result {
                 case .success(let msg):
+                    self.lastSeenAt = Date()   // 收到任何入站消息都刷新存活时间戳
                     switch msg {
                     case .string(let s): self.handleText(s)
                     case .data(let d):
@@ -182,7 +187,9 @@ final class RelayClient: NSObject {
             case "partial":
                 if let t = obj["text"] as? String { self.onEvent?(.partial(t)) }
             case "final":
-                if let t = obj["text"] as? String { self.onEvent?(.final(t)) }
+                if let t = obj["text"] as? String { self.onEvent?(.final(t, obj["id"] as? String)) }
+            case "key":
+                if let k = obj["key"] as? String { self.onEvent?(.key(k, obj["id"] as? String)) }
             case "error":
                 let m = (obj["message"] as? String) ?? "错误"
                 self.onEvent?(.error(m))
@@ -231,7 +238,14 @@ final class RelayClient: NSObject {
     private func startPing() {
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { [weak self] _ in
-            self?.send(["type": "ping"])
+            guard let self else { return }
+            // 心跳看门狗：60s 没收到任何入站消息（含 pong）→ 判半开死连（睡眠/网络切换后常见），强制重连。
+            if Date().timeIntervalSince(self.lastSeenAt) > 60 {
+                self.handleFailure(NSError(domain: "RelayClient", code: -1001,
+                    userInfo: [NSLocalizedDescriptionKey: "心跳超时"]))
+                return
+            }
+            self.send(["type": "ping"])
         }
     }
 

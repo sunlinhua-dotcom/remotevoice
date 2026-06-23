@@ -1,7 +1,7 @@
 // 临时：对部署在 Cloudflare 的统一中继做端到端联调（mac+phone 配对 → phone 推音频 → 看 ASR 生命周期）。
 // 合成音无法产出可读中文，成功标准 = 无鉴权/framing 错误、能收到 final（空文本也算链路通）。
 import WebSocket from "ws";
-const URL = process.env.WS_URL || "wss://remotevoice-pwa.sunlinhua.workers.dev/ws";
+const URL = process.env.WS_URL || "wss://YOUR-WORKER-SUBDOMAIN.workers.dev/ws";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const recv = (ws, type, ms = 8000) =>
   new Promise((resolve, reject) => {

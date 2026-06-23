@@ -18,6 +18,7 @@ cf/.wrangler/
 .env
 relay/.env
 *.local
+feishu/.device_token*
 
 # 日志
 *.log

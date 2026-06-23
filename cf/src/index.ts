@@ -14,7 +14,12 @@ interface Env {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/ws" || url.pathname === "/healthz") {
+    if (
+      url.pathname === "/ws" ||
+      url.pathname === "/healthz" ||
+      url.pathname === "/i" ||
+      url.pathname.startsWith("/i/")
+    ) {
       const id = env.RELAY_HUB.idFromName("hub"); // 单例：所有连接落到同一个 DO
       return env.RELAY_HUB.get(id).fetch(request);
     }

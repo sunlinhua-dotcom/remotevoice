@@ -54,6 +54,9 @@ class PcmPump extends AudioWorkletProcessor {
       }
     }
     this.pos -= n;
+    // 跨缓冲区进位若落到负值（退出时 pos∈[n-1,n) 时会发生），下一帧 Math.floor 会读 ch[-1]
+    // 得 NaN→0，在每个缓冲区边界注入伪零样本。钳到 0，避免越界毛刺。
+    if (this.pos < 0) this.pos = 0;
 
     // 每 ~0.4s 上报一次诊断
     if (currentTime - this.dbgLast > 0.4) {
